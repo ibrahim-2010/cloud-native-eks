@@ -1,0 +1,58 @@
+name: CI — Validate Configs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-kubernetes:
+    name: Validate Kubernetes Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate YAML syntax
+        run: |
+          echo "Validating Kubernetes manifests..."
+          for f in $(find Kubernetes-Manifests-file -name "*.yaml" -o -name "*.yml"); do
+            echo "  Checking $f"
+            python3 -c "import yaml; yaml.safe_load(open('$f'))"
+          done
+          echo "All YAML files are syntactically valid"
+
+  validate-terraform:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Terraform format check
+        working-directory: Jenkins-Server-TF
+        run: terraform fmt -check -recursive
+
+      - name: Terraform validate
+        working-directory: Jenkins-Server-TF
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  validate-jenkinsfiles:
+    name: Verify Jenkinsfiles
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Jenkinsfiles exist
+        run: |
+          test -f Jenkins-Pipeline-Code/Jenkinsfile-Backend && echo "Backend Jenkinsfile: OK"
+          test -f Jenkins-Pipeline-Code/Jenkinsfile-Frontend && echo "Frontend Jenkinsfile: OK"

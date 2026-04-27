@@ -1,0 +1,226 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #0f0f1a;
+  color: #e0e0e0;
+  min-height: 100vh;
+}
+
+.app {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #2a2a3e;
+}
+
+.header h1 {
+  font-size: 1.8rem;
+  color: #60a5fa;
+  margin-bottom: 0.3rem;
+}
+
+.subtitle {
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.health-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  font-size: 0.8rem;
+  color: #999;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-dot.green { background: #22c55e; box-shadow: 0 0 6px #22c55e55; }
+.status-dot.red { background: #ef4444; box-shadow: 0 0 6px #ef444455; }
+
+.stats-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.stat {
+  background: #1a1a2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+}
+
+.stat-num {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #60a5fa;
+}
+
+.stat-num.hostname {
+  font-size: 0.7rem;
+  font-family: monospace;
+  word-break: break-all;
+  color: #a78bfa;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.form-section, .tasks-section {
+  margin-bottom: 2rem;
+}
+
+.form-section h2, .tasks-section h2 {
+  font-size: 1rem;
+  color: #60a5fa;
+  margin-bottom: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.form-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.form-row input {
+  flex: 1;
+  padding: 0.7rem 1rem;
+  background: #1a1a2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.form-row input:focus {
+  border-color: #60a5fa;
+}
+
+.form-row button {
+  padding: 0.7rem 1.5rem;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+
+.form-row button:hover { background: #2563eb; }
+
+.error {
+  background: #1a0f0f;
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  padding: 0.8rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
+.loading, .empty {
+  color: #666;
+  text-align: center;
+  padding: 2rem;
+}
+
+.task-list {
+  list-style: none;
+}
+
+.task-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background: #1a1a2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+  transition: border-color 0.2s;
+}
+
+.task-item:hover { border-color: #3b82f6; }
+.task-item.completed { opacity: 0.6; }
+.task-item.completed strong { text-decoration: line-through; }
+
+.task-info strong {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.task-info p {
+  font-size: 0.85rem;
+  color: #999;
+  margin-bottom: 0.3rem;
+}
+
+.task-meta {
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.task-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.task-actions button {
+  padding: 0.4rem 0.8rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: opacity 0.2s;
+}
+
+.btn-complete { background: #22c55e; color: white; }
+.btn-pending { background: #f59e0b; color: #1a1a2e; }
+.btn-delete { background: #ef4444; color: white; }
+.task-actions button:hover { opacity: 0.85; }
+
+.footer {
+  text-align: center;
+  padding-top: 2rem;
+  border-top: 1px solid #2a2a3e;
+  color: #666;
+  font-size: 0.8rem;
+}
+
+.tech-stack {
+  margin-top: 0.3rem;
+  color: #555;
+  font-size: 0.7rem;
+}
+
+@media (max-width: 600px) {
+  .stats-bar { grid-template-columns: repeat(2, 1fr); }
+  .form-row { flex-direction: column; }
+  .task-item { flex-direction: column; gap: 0.8rem; align-items: flex-start; }
+}

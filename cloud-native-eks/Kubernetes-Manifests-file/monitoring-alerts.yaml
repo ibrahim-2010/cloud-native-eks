@@ -1,0 +1,72 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cloud-native-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app: kube-prometheus-stack
+spec:
+  groups:
+    - name: cloud-native-application
+      rules:
+        # Alert: Pod replicas below desired count
+        - alert: PodDown
+          expr: >
+            kube_deployment_status_replicas_available{namespace="three-tier"}
+            < kube_deployment_spec_replicas{namespace="three-tier"}
+          for: 1m
+          labels:
+            severity: critical
+            team: devops
+          annotations:
+            summary: "Pod replica count below desired in {{ $labels.deployment }}"
+            description: "Deployment {{ $labels.deployment }} has {{ $value }} available replicas, expected {{ $labels.spec_replicas }}"
+
+        # Alert: High CPU usage across application pods
+        - alert: HighCPUUsage
+          expr: >
+            rate(container_cpu_usage_seconds_total{namespace="three-tier"}[5m]) > 0.8
+          for: 2m
+          labels:
+            severity: warning
+            team: devops
+          annotations:
+            summary: "High CPU usage detected in three-tier namespace"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} is using excessive CPU"
+
+        # Alert: Pod is crash-looping
+        - alert: PodCrashLooping
+          expr: >
+            rate(kube_pod_container_status_restarts_total{namespace="three-tier"}[15m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            team: devops
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash-looping"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} has been restarting"
+
+        # Alert: PostgreSQL pod is down
+        - alert: PostgreSQLDown
+          expr: >
+            kube_deployment_status_replicas_available{namespace="three-tier", deployment="postgres"} == 0
+          for: 30s
+          labels:
+            severity: critical
+            team: devops
+          annotations:
+            summary: "PostgreSQL database is DOWN"
+            description: "No PostgreSQL pods are available in the three-tier namespace"
+
+        # Alert: Redis pod is down
+        - alert: RedisDown
+          expr: >
+            kube_deployment_status_replicas_available{namespace="three-tier", deployment="redis"} == 0
+          for: 30s
+          labels:
+            severity: critical
+            team: devops
+          annotations:
+            summary: "Redis cache is DOWN"
+            description: "No Redis pods are available in the three-tier namespace"

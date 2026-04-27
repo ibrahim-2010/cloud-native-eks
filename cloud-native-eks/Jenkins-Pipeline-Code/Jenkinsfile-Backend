@@ -1,0 +1,115 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_ACCOUNT_ID     = credentials('ACCOUNT_ID')
+        AWS_ECR_REPO       = credentials('ECR_REPO2')
+        AWS_DEFAULT_REGION = 'us-east-1'
+        REPO_URI           = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${AWS_ECR_REPO}"
+    }
+
+    stages {
+        stage('Cleanup Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/ibrahim-2010/cloud-native-eks.git',
+                    credentialsId: 'github-token'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                dir('Application-Code/backend') {
+                    withSonarQubeEnv('sonar') {
+                        sh '''
+                            sonar-scanner \
+                              -Dsonar.projectKey=cloud-native-backend \
+                              -Dsonar.sources=. \
+                              -Dsonar.exclusions=node_modules/**,coverage/**
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 2, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Trivy Filesystem Scan') {
+            steps {
+                dir('Application-Code/backend') {
+                    sh 'trivy fs --exit-code 0 --severity HIGH,CRITICAL --format table .'
+                }
+            }
+        }
+
+        stage('Docker Build & Tag') {
+            steps {
+                dir('Application-Code/backend') {
+                    sh "docker build -t ${REPO_URI}:${BUILD_NUMBER} ."
+                    sh "docker tag ${REPO_URI}:${BUILD_NUMBER} ${REPO_URI}:latest"
+                }
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            steps {
+                sh "trivy image --exit-code 0 --severity HIGH,CRITICAL --format table ${REPO_URI}:${BUILD_NUMBER}"
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                sh """
+                    aws ecr get-login-password --region ${AWS_DEFAULT_REGION} \
+                      | docker login --username AWS --password-stdin \
+                        ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+                    docker push ${REPO_URI}:${BUILD_NUMBER}
+                    docker push ${REPO_URI}:latest
+                """
+            }
+        }
+
+        stage('Update Kubernetes Manifest') {
+            environment {
+                GITHUB_TOKEN = credentials('github-token')
+            }
+            steps {
+                sh """
+                    sed -i 's|image: .*|image: ${REPO_URI}:${BUILD_NUMBER}|' \
+                      Kubernetes-Manifests-file/Backend/deployment.yaml
+                    git config user.email "jenkins@cloud-native.local"
+                    git config user.name "Jenkins Pipeline"
+                    git add Kubernetes-Manifests-file/Backend/deployment.yaml
+                    git commit -m "chore: update backend image to build ${BUILD_NUMBER}" || true
+                    git push https://${GITHUB_TOKEN}@github.com/ibrahim-2010/cloud-native-eks.git main
+                """
+            }
+        }
+    }
+
+    post {
+        always {
+            sh "docker rmi ${REPO_URI}:${BUILD_NUMBER} || true"
+            sh "docker rmi ${REPO_URI}:latest || true"
+            cleanWs()
+        }
+        success {
+            echo "Backend pipeline completed successfully — Build #${BUILD_NUMBER}"
+        }
+        failure {
+            echo "Backend pipeline FAILED at Build #${BUILD_NUMBER}"
+        }
+    }
+}
