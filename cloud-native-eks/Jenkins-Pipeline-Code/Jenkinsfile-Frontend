@@ -19,6 +19,27 @@ pipeline {
                     credentialsId: 'github-creds'
             }
         }
+        stage('SonarQube Analysis') {
+            steps {
+                dir('cloud-native-eks/Application-Code/frontend') {
+                    withSonarQubeEnv('sonar') {
+                        sh '''
+                            sonar-scanner \
+                              -Dsonar.projectKey=cloud-native-frontend \
+                              -Dsonar.sources=src \
+                              -Dsonar.exclusions=node_modules/**,build/**,coverage/**
+                        '''
+                    }
+                }
+            }
+        }
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 2, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
         stage('Trivy Filesystem Scan') {
             steps {
                 dir('cloud-native-eks/Application-Code/frontend') {
