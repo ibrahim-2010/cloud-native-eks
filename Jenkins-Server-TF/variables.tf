@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "instance_type" {
   description = "EC2 instance type for Jenkins server (m7i-flex.large = 8GB RAM for Jenkins + SonarQube + Docker)"
   type        = string
-  default     = "m7i-flex.large"
+  default     = "t3.xlarge"
 }
 
 variable "key_name" {
