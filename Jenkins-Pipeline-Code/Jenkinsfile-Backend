@@ -21,7 +21,7 @@ pipeline {
         }
         stage('SonarQube Analysis') {
             steps {
-                dir('cloud-native-eks/Application-Code/backend') {
+                dir('Application-Code/backend') {
                     withSonarQubeEnv('sonar') {
                         sh '''
                             sonar-scanner \
@@ -42,14 +42,14 @@ pipeline {
         }
         stage('Trivy Filesystem Scan') {
             steps {
-                dir('cloud-native-eks/Application-Code/backend') {
+                dir('Application-Code/backend') {
                     sh 'trivy fs --exit-code 0 --severity HIGH,CRITICAL --format table .'
                 }
             }
         }
         stage('Docker Build & Tag') {
             steps {
-                dir('cloud-native-eks/Application-Code/backend') {
+                dir('Application-Code/backend') {
                     sh "docker build -t ${REPO_URI}:${BUILD_NUMBER} ."
                     sh "docker tag ${REPO_URI}:${BUILD_NUMBER} ${REPO_URI}:latest"
                 }
@@ -78,10 +78,10 @@ pipeline {
             steps {
                 sh """
                     sed -i 's|image: .*|image: ${REPO_URI}:${BUILD_NUMBER}|' \
-                      cloud-native-eks/Kubernetes-Manifests-file/Backend/deployment.yaml
+                      Kubernetes-Manifests-file/Backend/deployment.yaml
                     git config user.email "jenkins@cloud-native.local"
                     git config user.name "Jenkins Pipeline"
-                    git add cloud-native-eks/Kubernetes-Manifests-file/Backend/deployment.yaml
+                    git add Kubernetes-Manifests-file/Backend/deployment.yaml
                     git commit -m "chore: update backend image to build ${BUILD_NUMBER}" || true
                     git push https://${GITHUB_TOKEN}@github.com/ibrahim-2010/cloud-native-eks.git main
                 """
