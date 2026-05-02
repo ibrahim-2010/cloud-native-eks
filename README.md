@@ -13,28 +13,6 @@
 
 ---
 
-## 🛠️ Tools & Technologies
-
-<p align="center">
-  <a href="https://aws.amazon.com" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/amazonwebservices/amazonwebservices-original-wordmark.svg" alt="aws" width="60" height="60"/></a>
-  <a href="https://kubernetes.io" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/kubernetes/kubernetes-plain-wordmark.svg" alt="kubernetes" width="60" height="60"/></a>
-  <a href="https://www.docker.com" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/docker/docker-original-wordmark.svg" alt="docker" width="60" height="60"/></a>
-  <a href="https://www.terraform.io" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/terraform/terraform-original-wordmark.svg" alt="terraform" width="60" height="60"/></a>
-  <a href="https://www.jenkins.io" target="_blank" rel="noreferrer"><img src="https://www.vectorlogo.zone/logos/jenkins/jenkins-icon.svg" alt="jenkins" width="60" height="60"/></a>
-  <a href="https://argoproj.github.io/cd" target="_blank" rel="noreferrer"><img src="https://www.vectorlogo.zone/logos/argoprojio/argoprojio-icon.svg" alt="argocd" width="60" height="60"/></a>
-  <a href="https://prometheus.io" target="_blank" rel="noreferrer"><img src="https://www.vectorlogo.zone/logos/prometheusio/prometheusio-icon.svg" alt="prometheus" width="60" height="60"/></a>
-  <a href="https://grafana.com" target="_blank" rel="noreferrer"><img src="https://www.vectorlogo.zone/logos/grafana/grafana-icon.svg" alt="grafana" width="60" height="60"/></a>
-  <a href="https://www.sonarqube.org" target="_blank" rel="noreferrer"><img src="https://cdn.worldvectorlogo.com/logos/sonarqube-1.svg" alt="sonarqube" width="100" height="60"/></a>
-  <a href="https://nodejs.org" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/nodejs/nodejs-original-wordmark.svg" alt="nodejs" width="60" height="60"/></a>
-  <a href="https://reactjs.org" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/react/react-original-wordmark.svg" alt="react" width="60" height="60"/></a>
-  <a href="https://www.postgresql.org" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/postgresql/postgresql-original-wordmark.svg" alt="postgresql" width="60" height="60"/></a>
-  <a href="https://redis.io" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/redis/redis-original-wordmark.svg" alt="redis" width="60" height="60"/></a>
-  <a href="https://nginx.org" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/nginx/nginx-original.svg" alt="nginx" width="60" height="60"/></a>
-  <a href="https://helm.sh" target="_blank" rel="noreferrer"><img src="https://www.vectorlogo.zone/logos/helmsh/helmsh-icon.svg" alt="helm" width="60" height="60"/></a>
-</p>
-
----
-
 Welcome to the Cloud-Native DevSecOps Three-Tier Application Deployment project! 🚀
 
 This repository hosts the implementation of a **Three-Tier Web App** using **ReactJS**, **Node.js**, **PostgreSQL**, and **Redis**, deployed on **AWS EKS**. The project covers a wide range of tools and practices for a robust, scalable, and secure DevOps setup.
@@ -228,7 +206,7 @@ Apply custom PrometheusRule alerts. Access Grafana via LoadBalancer.
 ### Phase 11: Domain & DNS
 Create Route 53 hosted zone, update nameservers at registrar, create A record alias to ALB.
 
-> 📖 **For the complete step-by-step guide with every command, see the [Full Deployment Guide](docs/ISSUES-REPORT.md)**
+> 📖 **For the complete step-by-step guide with every command, see the [Full Deployment Guide](docs/DEPLOYMENT-GUIDE.md)**
 
 ---
 
