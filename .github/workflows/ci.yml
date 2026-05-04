@@ -20,7 +20,7 @@ jobs:
           ERRORS=0
           for f in $(find Kubernetes-Manifests-file argocd -name "*.yaml" -o -name "*.yml" 2>/dev/null); do
             echo "  Checking $f"
-            python3 -c "import yaml; yaml.safe_load(open('$f'))" || ERRORS=$((ERRORS+1))
+            python3 -c "import yaml; list(yaml.safe_load_all(open('$f')))" || ERRORS=$((ERRORS+1))
           done
           if [ $ERRORS -gt 0 ]; then
             echo "FAILED: $ERRORS files with invalid YAML"
