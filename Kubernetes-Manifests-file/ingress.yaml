@@ -10,11 +10,12 @@ metadata:
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
     alb.ingress.kubernetes.io/healthcheck-path: /nginx-health
     alb.ingress.kubernetes.io/tags: Project=cloud-native-eks
+    # ExternalDNS annotation — auto-creates Route 53 A record
+    external-dns.alpha.kubernetes.io/hostname: platinum-consults.com
 spec:
   rules:
-    # NOTE: Add "- host: yourdomain.com" here after configuring Route 53
-    # Without a host field, the ALB accepts traffic on any hostname (good for testing)
-    - http:
+    - host: platinum-consults.com
+      http:
         paths:
           - path: /api
             pathType: Prefix
