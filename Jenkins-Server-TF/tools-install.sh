@@ -3,28 +3,29 @@ set -euo pipefail
 # =============================================================================
 # Tools Installation Script for Jenkins Server (Ubuntu 22.04)
 #
-# Installs: Java, Jenkins, Docker, SonarQube, Sonar-Scanner, AWS CLI,
-#           kubectl, eksctl, Terraform, Trivy, Helm
+# FIXES APPLIED FROM DEPLOYMENT 3:
+#   1. Uses jenkins-plugin-manager JAR (from GitHub, not Jenkins mirrors)
+#      for reliable plugin installation with dependency resolution
+#   2. docker-workflow instead of docker-pipeline (renamed plugin)
+#   3. SonarQube removed from JCasC YAML (sonarGlobalConfiguration not 
+#      recognized — configure via setup-jcasc.sh API call instead)
+#   4. systemd override for JCasC (not /etc/default/jenkins)
+#   5. Jenkins stopped before plugin install, started AFTER everything ready
+#   6. sonar-scanner installed with verification
+#   7. setup-jcasc.sh downloaded from GitHub repo
 #
-# Configures: JCasC (Jenkins Configuration as Code)
-#   - Plugins downloaded BEFORE Jenkins first boot (no CLI needed)
-#   - JCasC YAML placed in Jenkins home before startup
-#   - systemd override used for environment variables (not /etc/default/jenkins)
-#   - Setup wizard disabled so JCasC takes full control
-#
-# After boot, run setup-jcasc.sh to inject secrets and restart Jenkins.
+# After boot, run: sudo bash /opt/setup-jcasc.sh
 # =============================================================================
 
 exec > /var/log/tools-install.log 2>&1
-echo "========== Starting tools installation =========="
+echo "========== Starting tools installation $(date) =========="
 
-# ─── Java 21 ─────────────────────────────────────────────────────────────────
-echo "===> Installing Java 21"
+# ─── System Update ───────────────────────────────────────────────────────────
+echo "===> Updating system"
 sudo apt update -y
-sudo apt install -y fontconfig openjdk-21-jdk curl gnupg unzip wget
-java --version
+sudo apt install -y fontconfig openjdk-21-jdk curl gnupg unzip wget lsb-release apt-transport-https
 
-# ─── Jenkins (install but DO NOT start yet) ──────────────────────────────────
+# ─── Jenkins ─────────────────────────────────────────────────────────────────
 echo "===> Installing Jenkins"
 sudo mkdir -p /etc/apt/keyrings
 sudo wget -O /etc/apt/keyrings/jenkins-keyring.asc \
@@ -35,233 +36,11 @@ echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] \
 sudo apt-get update -y
 sudo apt-get install -y jenkins
 
-# STOP Jenkins immediately — we need to configure it before first real boot
+# STOP Jenkins — configure everything before first real boot
 sudo systemctl stop jenkins
+sudo systemctl disable jenkins
 sleep 5
-
-# ─── Download Jenkins Plugins BEFORE First Boot ──────────────────────────────
-echo "===> Downloading Jenkins plugins to filesystem"
-PLUGIN_DIR="/var/lib/jenkins/plugins"
-sudo mkdir -p "$PLUGIN_DIR"
-
-PLUGINS=(
-  configuration-as-code
-  job-dsl
-  workflow-aggregator
-  pipeline-stage-view
-  git
-  git-client
-  docker-pipeline
-  docker-commons
-  sonar
-  pipeline-aws
-  kubernetes-cli
-  credentials
-  credentials-binding
-  plain-credentials
-  ws-cleanup
-  timestamper
-  antisamy-markup-formatter
-  build-timeout
-  cloudbees-folder
-  pipeline-github-lib
-  pipeline-graph-analysis
-  pipeline-model-definition
-  pipeline-model-extensions
-  pipeline-stage-step
-  workflow-cps
-  workflow-durable-task-step
-  workflow-job
-  workflow-multibranch
-  workflow-scm-step
-  workflow-step-api
-  workflow-support
-  ssh-credentials
-  matrix-auth
-  script-security
-  structs
-  scm-api
-  branch-api
-  token-macro
-  mailer
-  display-url-api
-  jackson2-api
-  jaxb
-  snakeyaml-api
-  json-path-api
-  commons-lang3-api
-  commons-text-api
-  caffeine-api
-  bootstrap5-api
-  jquery3-api
-  font-awesome-api
-  echarts-api
-  plugin-util-api
-  checks-api
-  junit
-  matrix-project
-  apache-httpcomponents-client-4-api
-  apache-httpcomponents-client-5-api
-  instance-identity
-  ionicons-api
-  jakarta-activation-api
-  jakarta-mail-api
-  javax-activation-api
-  joda-time-api
-  mina-sshd-api-common
-  mina-sshd-api-core
-  asm-api
-  json-api
-  variant
-  durable-task
-  trilead-api
-  bouncycastle-api
-  eddsa-api
-  gson-api
-  workflow-api
-  pipeline-input-step
-  pipeline-milestone-step
-  pipeline-build-step
-  plain-credentials
-  ssh-slaves
-  resource-disposer
-  prism-api
-)
-
-for plugin in "${PLUGINS[@]}"; do
-  echo "  Downloading: $plugin"
-  sudo wget -q -O "$PLUGIN_DIR/${plugin}.hpi" \
-    "https://updates.jenkins.io/latest/${plugin}.hpi" 2>/dev/null \
-    || echo "  WARNING: Failed to download $plugin"
-done
-
-sudo chown -R jenkins:jenkins "$PLUGIN_DIR"
-
-# ─── Configure JCasC (before Jenkins starts) ─────────────────────────────────
-echo "===> Setting up JCasC"
-sudo mkdir -p /var/lib/jenkins/casc_configs
-
-# Get the public IP for Jenkins URL
-PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo "localhost")
-
-# Create the JCasC config with the actual IP baked in
-cat > /tmp/jenkins-casc.yaml << CASC_EOF
-jenkins:
-  systemMessage: "Cloud-Native EKS Project — Configured via JCasC"
-  numExecutors: 2
-  securityRealm:
-    local:
-      allowsSignup: false
-      users:
-        - id: "admin"
-          password: "\${JENKINS_ADMIN_PASSWORD:-admin123}"
-  authorizationStrategy:
-    loggedInUsersCanDoAnything:
-      allowAnonymousRead: false
-
-unclassified:
-  location:
-    url: "http://${PUBLIC_IP}:8080/"
-  sonarGlobalConfiguration:
-    buildWrapperEnabled: true
-    installations:
-      - name: "sonar"
-        serverUrl: "http://localhost:9000"
-        credentialsId: "sonar"
-        triggers:
-          skipScmCause: false
-          skipUpstreamCause: false
-
-credentials:
-  system:
-    domainCredentials:
-      - credentials:
-          - usernamePassword:
-              scope: GLOBAL
-              id: "github-creds"
-              description: "GitHub credentials for SCM checkout"
-              username: "\${GITHUB_USERNAME}"
-              password: "\${GITHUB_PAT}"
-          - string:
-              scope: GLOBAL
-              id: "github-token"
-              description: "GitHub PAT for pipeline git push"
-              secret: "\${GITHUB_PAT}"
-          - string:
-              scope: GLOBAL
-              id: "ACCOUNT_ID"
-              description: "AWS Account ID"
-              secret: "\${AWS_ACCOUNT_ID}"
-          - string:
-              scope: GLOBAL
-              id: "ECR_REPO1"
-              description: "Frontend ECR repository name"
-              secret: "frontend"
-          - string:
-              scope: GLOBAL
-              id: "ECR_REPO2"
-              description: "Backend ECR repository name"
-              secret: "backend"
-          - string:
-              scope: GLOBAL
-              id: "sonar"
-              description: "SonarQube authentication token"
-              secret: "\${SONARQUBE_TOKEN}"
-
-jobs:
-  - script: >
-      pipelineJob('three-tier-backend') {
-        description('Backend CI/CD Pipeline — SonarQube + Trivy + ECR + GitOps')
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('https://github.com/ibrahim-2010/cloud-native-eks.git')
-                  credentials('github-creds')
-                }
-                branches('*/main')
-              }
-            }
-            scriptPath('Jenkins-Pipeline-Code/Jenkinsfile-Backend')
-          }
-        }
-      }
-  - script: >
-      pipelineJob('three-tier-frontend') {
-        description('Frontend CI/CD Pipeline — SonarQube + Trivy + ECR + GitOps')
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('https://github.com/ibrahim-2010/cloud-native-eks.git')
-                  credentials('github-creds')
-                }
-                branches('*/main')
-              }
-            }
-            scriptPath('Jenkins-Pipeline-Code/Jenkinsfile-Frontend')
-          }
-        }
-      }
-CASC_EOF
-
-sudo cp /tmp/jenkins-casc.yaml /var/lib/jenkins/casc_configs/jenkins.yaml
-sudo chown -R jenkins:jenkins /var/lib/jenkins/casc_configs
-
-# ─── Configure systemd override for JCasC ────────────────────────────────────
-echo "===> Configuring systemd override for JCasC"
-sudo mkdir -p /etc/systemd/system/jenkins.service.d
-
-cat > /tmp/jenkins-override.conf << 'OVERRIDE_EOF'
-[Service]
-Environment="JAVA_OPTS=-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Dcasc.jenkins.config=/var/lib/jenkins/casc_configs/jenkins.yaml"
-Environment="CASC_JENKINS_CONFIG=/var/lib/jenkins/casc_configs/jenkins.yaml"
-OVERRIDE_EOF
-
-sudo cp /tmp/jenkins-override.conf /etc/systemd/system/jenkins.service.d/override.conf
-sudo systemctl daemon-reload
+echo "  Jenkins installed and stopped"
 
 # ─── Docker ──────────────────────────────────────────────────────────────────
 echo "===> Installing Docker"
@@ -287,6 +66,12 @@ unzip -o sonar-scanner-cli-5.0.1.3006-linux.zip
 sudo mv sonar-scanner-5.0.1.3006-linux /opt/sonar-scanner
 sudo ln -sf /opt/sonar-scanner/bin/sonar-scanner /usr/local/bin/sonar-scanner
 rm -f sonar-scanner-cli-5.0.1.3006-linux.zip
+# Verify
+if sonar-scanner --version 2>&1 | grep -q "SonarScanner"; then
+  echo "  sonar-scanner installed successfully"
+else
+  echo "  WARNING: sonar-scanner installation may have failed"
+fi
 
 # ─── AWS CLI ─────────────────────────────────────────────────────────────────
 echo "===> Installing AWS CLI"
@@ -331,21 +116,205 @@ sudo apt update -y && sudo apt install -y trivy
 echo "===> Installing Helm"
 curl -s https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-# ─── NOW Start Jenkins (plugins + JCasC all in place) ────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  JENKINS PLUGIN INSTALLATION
+#  Uses jenkins-plugin-manager from GitHub (NOT Jenkins mirrors)
+#  This tool resolves ALL dependencies automatically
+# ══════════════════════════════════════════════════════════════════════════════
+
+echo "===> Downloading Jenkins Plugin Manager"
+PLUGIN_MGR_VERSION="2.13.2"
+wget -q "https://github.com/jenkinsci/plugin-installation-manager-tool/releases/download/${PLUGIN_MGR_VERSION}/jenkins-plugin-manager-${PLUGIN_MGR_VERSION}.jar" \
+  -O /tmp/jenkins-plugin-manager.jar
+
+echo "===> Installing Jenkins plugins (with dependency resolution)"
+# Retry up to 3 times in case of transient mirror issues
+for attempt in 1 2 3; do
+  echo "  Attempt $attempt of 3..."
+  java -jar /tmp/jenkins-plugin-manager.jar \
+    --war /usr/share/java/jenkins.war \
+    --plugin-download-directory /var/lib/jenkins/plugins \
+    --plugins \
+    configuration-as-code \
+    job-dsl \
+    workflow-aggregator \
+    pipeline-stage-view \
+    git \
+    docker-workflow \
+    docker-commons \
+    sonar \
+    pipeline-aws \
+    kubernetes-cli \
+    credentials-binding \
+    ws-cleanup \
+    timestamper \
+    && break || echo "  Attempt $attempt failed, retrying in 30s..." && sleep 30
+done
+
+# Verify plugins were downloaded
+PLUGIN_COUNT=$(find /var/lib/jenkins/plugins -name "*.jpi" -o -name "*.hpi" 2>/dev/null | wc -l)
+echo "  Plugins downloaded: $PLUGIN_COUNT"
+if [ "$PLUGIN_COUNT" -lt 10 ]; then
+  echo "  WARNING: Plugin installation may have failed. Check mirror status."
+  echo "  Test: curl -s -o /dev/null -w '%{http_code}' https://updates.jenkins.io/latest/configuration-as-code.hpi"
+fi
+
+sudo chown -R jenkins:jenkins /var/lib/jenkins/plugins/
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  JCASC CONFIGURATION
+#  NOTE: SonarQube is NOT configured in JCasC because the attribute name
+#  (sonarGlobalConfiguration) is not recognized by JCasC in newer Jenkins.
+#  SonarQube is configured via API in setup-jcasc.sh instead.
+# ══════════════════════════════════════════════════════════════════════════════
+
+echo "===> Setting up JCasC"
+sudo mkdir -p /var/lib/jenkins/casc_configs
+
+# Get the public IP for Jenkins URL
+PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "localhost")
+
+cat > /tmp/jenkins-casc.yaml << 'CASC_EOF'
+jenkins:
+  systemMessage: "Cloud-Native EKS Project — Configured via JCasC"
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "${JENKINS_ADMIN_PASSWORD:-admin123}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+unclassified:
+  location:
+    url: "JENKINS_URL_PLACEHOLDER"
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "github-creds"
+              description: "GitHub credentials for SCM checkout"
+              username: "${GITHUB_USERNAME}"
+              password: "${GITHUB_PAT}"
+          - string:
+              scope: GLOBAL
+              id: "github-token"
+              description: "GitHub PAT for pipeline git push"
+              secret: "${GITHUB_PAT}"
+          - string:
+              scope: GLOBAL
+              id: "ACCOUNT_ID"
+              description: "AWS Account ID"
+              secret: "${AWS_ACCOUNT_ID}"
+          - string:
+              scope: GLOBAL
+              id: "ECR_REPO1"
+              description: "Frontend ECR repository name"
+              secret: "frontend"
+          - string:
+              scope: GLOBAL
+              id: "ECR_REPO2"
+              description: "Backend ECR repository name"
+              secret: "backend"
+          - string:
+              scope: GLOBAL
+              id: "sonar"
+              description: "SonarQube authentication token"
+              secret: "${SONARQUBE_TOKEN}"
+
+jobs:
+  - script: >
+      pipelineJob('three-tier-backend') {
+        description('Backend CI/CD Pipeline')
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/ibrahim-2010/cloud-native-eks.git')
+                  credentials('github-creds')
+                }
+                branches('*/main')
+              }
+            }
+            scriptPath('Jenkins-Pipeline-Code/Jenkinsfile-Backend')
+          }
+        }
+      }
+  - script: >
+      pipelineJob('three-tier-frontend') {
+        description('Frontend CI/CD Pipeline')
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/ibrahim-2010/cloud-native-eks.git')
+                  credentials('github-creds')
+                }
+                branches('*/main')
+              }
+            }
+            scriptPath('Jenkins-Pipeline-Code/Jenkinsfile-Frontend')
+          }
+        }
+      }
+CASC_EOF
+
+# Replace the URL placeholder with actual IP
+sed -i "s|JENKINS_URL_PLACEHOLDER|http://${PUBLIC_IP}:8080/|" /tmp/jenkins-casc.yaml
+
+sudo cp /tmp/jenkins-casc.yaml /var/lib/jenkins/casc_configs/jenkins.yaml
+sudo chown -R jenkins:jenkins /var/lib/jenkins/casc_configs
+
+# ─── Configure systemd override ─────────────────────────────────────────────
+echo "===> Configuring systemd override for JCasC"
+sudo mkdir -p /etc/systemd/system/jenkins.service.d
+
+cat > /tmp/jenkins-override.conf << 'OVERRIDE_EOF'
+[Service]
+Environment="JAVA_OPTS=-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Dcasc.jenkins.config=/var/lib/jenkins/casc_configs/jenkins.yaml"
+Environment="CASC_JENKINS_CONFIG=/var/lib/jenkins/casc_configs/jenkins.yaml"
+OVERRIDE_EOF
+
+sudo cp /tmp/jenkins-override.conf /etc/systemd/system/jenkins.service.d/override.conf
+sudo systemctl daemon-reload
+
+# ─── Download setup-jcasc.sh ─────────────────────────────────────────────────
+echo "===> Downloading setup-jcasc.sh"
+wget -q -O /opt/setup-jcasc.sh \
+  "https://raw.githubusercontent.com/ibrahim-2010/cloud-native-eks/main/Jenkins-Server-TF/jcasc/setup-jcasc.sh" \
+  || echo "  WARNING: Could not download setup-jcasc.sh — download manually after boot"
+sudo chmod +x /opt/setup-jcasc.sh 2>/dev/null || true
+
+# ─── Start Jenkins ───────────────────────────────────────────────────────────
 echo "===> Starting Jenkins with JCasC and pre-installed plugins"
 sudo systemctl enable jenkins
 sudo systemctl start jenkins
 
-echo "========== All tools installed successfully =========="
+# ─── Verify all tools ────────────────────────────────────────────────────────
+echo ""
+echo "========== Installation Complete $(date) =========="
+echo ""
+echo "Tool Versions:"
+echo "  Jenkins:        $(jenkins --version 2>/dev/null || echo 'check manually')"
+echo "  Docker:         $(docker --version 2>/dev/null | awk '{print $3}' || echo 'check manually')"
+echo "  Terraform:      $(terraform --version 2>/dev/null | head -1 || echo 'check manually')"
+echo "  AWS CLI:        $(aws --version 2>/dev/null | awk '{print $1}' || echo 'check manually')"
+echo "  kubectl:        $(kubectl version --client --short 2>/dev/null || echo 'check manually')"
+echo "  eksctl:         $(eksctl version 2>/dev/null || echo 'check manually')"
+echo "  Helm:           $(helm version --short 2>/dev/null || echo 'check manually')"
+echo "  Trivy:          $(trivy --version 2>/dev/null | head -1 || echo 'check manually')"
+echo "  sonar-scanner:  $(sonar-scanner --version 2>&1 | grep SonarScanner || echo 'check manually')"
+echo "  Plugins:        ${PLUGIN_COUNT} downloaded"
 echo ""
 echo "NEXT STEPS:"
 echo "  1. SSH into this server"
-echo "  2. Generate a SonarQube token at http://<ip>:9000"
-echo "  3. Run: sudo bash /opt/setup-jcasc.sh"
-echo "  4. Jenkins will auto-configure with all credentials, jobs, and SonarQube"
-
-# ─── Download setup-jcasc.sh from GitHub ─────────────────────────────────────
-echo "===> Downloading setup-jcasc.sh"
-sudo wget -q -O /opt/setup-jcasc.sh \
-  "https://raw.githubusercontent.com/ibrahim-2010/cloud-native-eks/main/Jenkins-Server-TF/jcasc/setup-jcasc.sh"
-sudo chmod +x /opt/setup-jcasc.sh
+echo "  2. Run: sudo bash /opt/setup-jcasc.sh"
+echo "  3. Jenkins auto-configures credentials, jobs, and SonarQube"
