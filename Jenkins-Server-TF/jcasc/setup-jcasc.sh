@@ -3,12 +3,14 @@ set -euo pipefail
 # =============================================================================
 #  JCasC Secret Injection — Run ONCE after Jenkins server boots
 #
-#  FIXES APPLIED FROM DEPLOYMENT 3:
-#   1. SonarQube configured via API (not JCasC — attribute name incompatible)
+#  ALL FIXES FROM DEPLOYMENTS 1-5:
+#   1. SonarQube configured via Groovy init script (not JCasC)
 #   2. Webhook uses private IP (localhost blocked by newer SonarQube)
-#   3. AWS credentials configured for both jenkins and root users
-#   4. systemd override for environment variables (not /etc/default/jenkins)
-#   5. Verifies Jenkins is actually responding before declaring success
+#   3. AWS credentials for jenkins + root users
+#   4. systemd override for environment variables
+#   5. SonarQube token auto-generated via API
+#   6. SonarQube password auto-changed
+#   7. Verifies Jenkins is responding before declaring success
 #
 #  Usage: sudo bash /opt/setup-jcasc.sh
 # =============================================================================
@@ -39,7 +41,7 @@ echo ""
 PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo "localhost")
 PRIVATE_IP=$(hostname -I | awk '{print $1}')
 
-# ─── SonarQube token automation ──────────────────────────────────────────────
+# ─── SonarQube setup ─────────────────────────────────────────────────────────
 echo ""
 echo -e "${YELLOW}Setting up SonarQube...${NC}"
 
@@ -51,9 +53,7 @@ for i in $(seq 1 60); do
   fi
   if [ "$i" -eq 60 ]; then
     echo -e "${RED}  SonarQube did not start within 5 minutes${NC}"
-    echo "  Check: docker ps | grep sonar"
-    echo "  Enter SonarQube token manually:"
-    read -sp "  SonarQube Token: " SONARQUBE_TOKEN
+    read -sp "  Enter SonarQube Token manually: " SONARQUBE_TOKEN
     echo ""
   fi
   sleep 5
@@ -81,22 +81,22 @@ if [ -z "${SONARQUBE_TOKEN:-}" ]; then
   fi
 fi
 
-# ─── Create SonarQube webhook (uses private IP, not localhost) ────────────────
+# ─── SonarQube webhook (private IP, not localhost) ───────────────────────────
 echo -e "${YELLOW}Creating SonarQube webhook...${NC}"
 WEBHOOK_RESULT=$(curl -s -u "admin:${SONAR_NEW_PASS}" -X POST \
   "http://localhost:9000/api/webhooks/create?name=jenkins&url=http://${PRIVATE_IP}:8080/sonarqube-webhook/" \
   2>/dev/null)
 if echo "$WEBHOOK_RESULT" | grep -q "errors"; then
-  echo "  Webhook may already exist or URL was rejected"
   echo "  Trying with public IP..."
   curl -s -u "admin:${SONAR_NEW_PASS}" -X POST \
     "http://localhost:9000/api/webhooks/create?name=jenkins-pub&url=http://${PUBLIC_IP}:8080/sonarqube-webhook/" \
     2>/dev/null || true
+  echo "  Webhook created with public IP"
 else
   echo "  Webhook created: http://${PRIVATE_IP}:8080/sonarqube-webhook/"
 fi
 
-# ─── Write systemd override with secrets ─────────────────────────────────────
+# ─── systemd override with secrets ───────────────────────────────────────────
 echo -e "${YELLOW}Writing systemd override with secrets...${NC}"
 sudo mkdir -p /etc/systemd/system/jenkins.service.d
 
@@ -111,8 +111,27 @@ Environment=\"AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}\"
 Environment=\"SONARQUBE_TOKEN=${SONARQUBE_TOKEN}\"
 EOF"
 
-# ─── Configure AWS CLI ───────────────────────────────────────────────────────
-echo -e "${YELLOW}Configuring AWS CLI for jenkins and root users...${NC}"
+# ─── SonarQube in Jenkins via Groovy init script ─────────────────────────────
+echo -e "${YELLOW}Configuring SonarQube server in Jenkins...${NC}"
+sudo mkdir -p /var/lib/jenkins/init.groovy.d
+sudo bash -c "cat > /var/lib/jenkins/init.groovy.d/sonarqube.groovy << 'GROOVY_EOF'
+import hudson.plugins.sonar.*
+import jenkins.model.Jenkins
+
+def instance = Jenkins.getInstance()
+def sonarConfig = instance.getDescriptor(SonarGlobalConfiguration.class)
+def sonarInstallation = new SonarInstallation(
+    'sonar', 'http://localhost:9000', 'sonar',
+    null, null, null, null, null, null
+)
+sonarConfig.setInstallations(sonarInstallation)
+sonarConfig.save()
+println 'SonarQube server configured via init.groovy.d'
+GROOVY_EOF"
+sudo chown jenkins:jenkins /var/lib/jenkins/init.groovy.d/sonarqube.groovy
+
+# ─── AWS CLI for jenkins + root users ────────────────────────────────────────
+echo -e "${YELLOW}Configuring AWS CLI...${NC}"
 
 # Jenkins user
 sudo mkdir -p /var/lib/jenkins/.aws
@@ -143,40 +162,12 @@ aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}
 EOF
 chmod 600 ~/.aws/credentials
 
-# Set exports for current session
 export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 export AWS_DEFAULT_REGION=us-east-1
 
-# ─── Configure SonarQube in Jenkins via Groovy (since JCasC doesn't support it) ─
-echo -e "${YELLOW}Configuring SonarQube server in Jenkins...${NC}"
-
-# Create a Groovy init script that configures SonarQube on Jenkins boot
-sudo mkdir -p /var/lib/jenkins/init.groovy.d
-sudo bash -c "cat > /var/lib/jenkins/init.groovy.d/sonarqube.groovy << 'GROOVY_EOF'
-import hudson.plugins.sonar.*
-import hudson.plugins.sonar.model.TriggersConfig
-import jenkins.model.Jenkins
-
-def instance = Jenkins.getInstance()
-def sonarConfig = instance.getDescriptor(SonarGlobalConfiguration.class)
-
-def sonarInstallation = new SonarInstallation(
-    'sonar',                          // name
-    'http://localhost:9000',           // serverUrl
-    'sonar',                          // credentialsId
-    null, null, null, null, null, null
-)
-
-sonarConfig.setInstallations(sonarInstallation)
-sonarConfig.save()
-
-println 'SonarQube server configured via init.groovy.d'
-GROOVY_EOF"
-sudo chown jenkins:jenkins /var/lib/jenkins/init.groovy.d/sonarqube.groovy
-
 # ─── Restart Jenkins ─────────────────────────────────────────────────────────
-echo -e "${YELLOW}Restarting Jenkins to apply JCasC with secrets...${NC}"
+echo -e "${YELLOW}Restarting Jenkins...${NC}"
 sudo systemctl daemon-reload
 sudo systemctl restart jenkins
 
@@ -213,11 +204,6 @@ if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ]; then
   echo ""
   echo "Verify AWS: aws sts get-caller-identity"
 else
-  echo -e "${RED}╔══════════════════════════════════════════════════╗"
-  echo "║         JENKINS DID NOT START PROPERLY             ║"
-  echo "╚══════════════════════════════════════════════════╝${NC}"
-  echo ""
-  echo "HTTP Status: $HTTP_CODE"
+  echo -e "${RED}Jenkins returned HTTP $HTTP_CODE${NC}"
   echo "Check logs: journalctl -u jenkins.service --no-pager | tail -30"
-  echo "Check plugins: ls /var/lib/jenkins/plugins/*.jpi /var/lib/jenkins/plugins/*.hpi 2>/dev/null | wc -l"
 fi

@@ -3,16 +3,17 @@ set -euo pipefail
 # =============================================================================
 # Tools Installation Script for Jenkins Server (Ubuntu 22.04)
 #
-# FIXES APPLIED FROM DEPLOYMENT 3:
-#   1. Uses jenkins-plugin-manager JAR (from GitHub, not Jenkins mirrors)
-#      for reliable plugin installation with dependency resolution
-#   2. docker-workflow instead of docker-pipeline (renamed plugin)
-#   3. SonarQube removed from JCasC YAML (sonarGlobalConfiguration not 
-#      recognized — configure via setup-jcasc.sh API call instead)
-#   4. systemd override for JCasC (not /etc/default/jenkins)
-#   5. Jenkins stopped before plugin install, started AFTER everything ready
-#   6. sonar-scanner installed with verification
-#   7. setup-jcasc.sh downloaded from GitHub repo
+# ALL FIXES APPLIED FROM DEPLOYMENTS 1-5:
+#   1. jenkins-plugin-manager JAR from GitHub (not Jenkins mirrors)
+#   2. docker-workflow (not docker-pipeline — renamed)
+#   3. SonarQube NOT in JCasC (sonarGlobalConfiguration incompatible)
+#   4. SonarQube configured via Groovy init script
+#   5. systemd override for JCasC (not /etc/default/jenkins)
+#   6. Jenkins STOPPED before plugins, STARTED after everything ready
+#   7. sonar-scanner installed with verification
+#   8. setup-jcasc.sh downloaded from GitHub
+#   9. Jenkins URL auto-set from EC2 metadata
+#  10. Plugin install retries 3x with 30s delays
 #
 # After boot, run: sudo bash /opt/setup-jcasc.sh
 # =============================================================================
@@ -51,7 +52,7 @@ sudo systemctl enable docker
 sudo systemctl restart docker
 sudo chmod 777 /var/run/docker.sock
 
-# ─── SonarQube (Docker container) ────────────────────────────────────────────
+# ─── SonarQube ───────────────────────────────────────────────────────────────
 echo "===> Starting SonarQube container"
 docker run -d --name sonar --restart unless-stopped \
   -p 9000:9000 \
@@ -66,7 +67,6 @@ unzip -o sonar-scanner-cli-5.0.1.3006-linux.zip
 sudo mv sonar-scanner-5.0.1.3006-linux /opt/sonar-scanner
 sudo ln -sf /opt/sonar-scanner/bin/sonar-scanner /usr/local/bin/sonar-scanner
 rm -f sonar-scanner-cli-5.0.1.3006-linux.zip
-# Verify
 if sonar-scanner --version 2>&1 | grep -q "SonarScanner"; then
   echo "  sonar-scanner installed successfully"
 else
@@ -128,7 +128,6 @@ wget -q "https://github.com/jenkinsci/plugin-installation-manager-tool/releases/
   -O /tmp/jenkins-plugin-manager.jar
 
 echo "===> Installing Jenkins plugins (with dependency resolution)"
-# Retry up to 3 times in case of transient mirror issues
 for attempt in 1 2 3; do
   echo "  Attempt $attempt of 3..."
   java -jar /tmp/jenkins-plugin-manager.jar \
@@ -151,27 +150,22 @@ for attempt in 1 2 3; do
     && break || echo "  Attempt $attempt failed, retrying in 30s..." && sleep 30
 done
 
-# Verify plugins were downloaded
 PLUGIN_COUNT=$(find /var/lib/jenkins/plugins -name "*.jpi" -o -name "*.hpi" 2>/dev/null | wc -l)
 echo "  Plugins downloaded: $PLUGIN_COUNT"
 if [ "$PLUGIN_COUNT" -lt 10 ]; then
-  echo "  WARNING: Plugin installation may have failed. Check mirror status."
-  echo "  Test: curl -s -o /dev/null -w '%{http_code}' https://updates.jenkins.io/latest/configuration-as-code.hpi"
+  echo "  WARNING: Plugin installation may have failed."
+  echo "  Check mirror status: curl -s -o /dev/null -w '%{http_code}' https://updates.jenkins.io/latest/configuration-as-code.hpi"
 fi
 
 sudo chown -R jenkins:jenkins /var/lib/jenkins/plugins/
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  JCASC CONFIGURATION
-#  NOTE: SonarQube is NOT configured in JCasC because the attribute name
-#  (sonarGlobalConfiguration) is not recognized by JCasC in newer Jenkins.
-#  SonarQube is configured via API in setup-jcasc.sh instead.
 # ══════════════════════════════════════════════════════════════════════════════
 
 echo "===> Setting up JCasC"
 sudo mkdir -p /var/lib/jenkins/casc_configs
 
-# Get the public IP for Jenkins URL
 PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "localhost")
 
 cat > /tmp/jenkins-casc.yaml << 'CASC_EOF'
@@ -267,13 +261,11 @@ jobs:
       }
 CASC_EOF
 
-# Replace the URL placeholder with actual IP
 sed -i "s|JENKINS_URL_PLACEHOLDER|http://${PUBLIC_IP}:8080/|" /tmp/jenkins-casc.yaml
-
 sudo cp /tmp/jenkins-casc.yaml /var/lib/jenkins/casc_configs/jenkins.yaml
 sudo chown -R jenkins:jenkins /var/lib/jenkins/casc_configs
 
-# ─── Configure systemd override ─────────────────────────────────────────────
+# ─── systemd override ───────────────────────────────────────────────────────
 echo "===> Configuring systemd override for JCasC"
 sudo mkdir -p /etc/systemd/system/jenkins.service.d
 
@@ -290,7 +282,7 @@ sudo systemctl daemon-reload
 echo "===> Downloading setup-jcasc.sh"
 wget -q -O /opt/setup-jcasc.sh \
   "https://raw.githubusercontent.com/ibrahim-2010/cloud-native-eks/main/Jenkins-Server-TF/jcasc/setup-jcasc.sh" \
-  || echo "  WARNING: Could not download setup-jcasc.sh — download manually after boot"
+  || echo "  WARNING: Could not download setup-jcasc.sh"
 sudo chmod +x /opt/setup-jcasc.sh 2>/dev/null || true
 
 # ─── Start Jenkins ───────────────────────────────────────────────────────────
@@ -298,7 +290,6 @@ echo "===> Starting Jenkins with JCasC and pre-installed plugins"
 sudo systemctl enable jenkins
 sudo systemctl start jenkins
 
-# ─── Verify all tools ────────────────────────────────────────────────────────
 echo ""
 echo "========== Installation Complete $(date) =========="
 echo ""

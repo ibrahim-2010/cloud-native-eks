@@ -20,8 +20,8 @@ resource "helm_release" "monitoring" {
   create_namespace = false
   skip_crds        = false
   timeout          = 900
-  wait             = true
-  wait_for_jobs    = true
+  wait             = false
+  wait_for_jobs    = false
 
   values = [
     yamlencode({

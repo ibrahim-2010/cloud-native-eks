@@ -3,15 +3,20 @@ set -uo pipefail
 # =============================================================================
 #  Cloud-Native EKS — Full Stack Destroy Script
 #
-#  Handles all teardown issues discovered across 4 deployment cycles:
+#  ALL FIXES FROM DEPLOYMENTS 1-5:
+#    - ArgoCD finalizer removal (prevents delete hang)
 #    - Helm monitoring uninstall BEFORE namespace deletion
-#    - Prometheus/Alertmanager CRD cleanup (prevents namespace finalizer hang)
-#    - ExternalDNS Route 53 record cleanup (prevents hosted zone deletion)
-#    - VPC dependency cleanup (security groups, ENIs, load balancers)
-#    - Namespace finalizer removal (prevents Terraform timeout)
+#    - All 9 monitoring CRDs deleted (prevents finalizer hang)
+#    - Namespace finalizers patched (prevents Terraform timeout)
+#    - Route 53 records cleaned TWICE (Phase 5 + Phase 7)
+#      because ExternalDNS can recreate records between phases
+#    - VPC dependencies cleaned (ALBs, ENIs, security groups)
+#    - Stuck namespaces + helm_release removed from Terraform state
+#    - Supports both python3 and python for Route 53 cleanup
+#    - Final verification scan for orphan resources
 #
 #  Usage: bash destroy.sh [--skip-confirmation]
-#  Run from the repo root directory on a machine with kubectl + AWS CLI access
+#  Run from the repo root directory with kubectl + AWS CLI access
 # =============================================================================
 
 RED='\033[0;31m'
@@ -21,6 +26,7 @@ NC='\033[0m'
 
 CLUSTER_NAME="cloud-native-cluster"
 REGION="us-east-1"
+DOMAIN="platinum-consults.com"
 
 echo -e "${RED}"
 echo "╔══════════════════════════════════════════════════╗"
@@ -39,11 +45,62 @@ fi
 
 echo ""
 
+# ══════════════════════════════════════════════════════════════
+#  Helper function: Clean Route 53 records
+#  Called in Phase 5 AND Phase 7 (ExternalDNS can recreate them)
+# ══════════════════════════════════════════════════════════════
+clean_route53_records() {
+  local ZONE_ID=$(aws route53 list-hosted-zones \
+    --query "HostedZones[?Name=='${DOMAIN}.'].Id" \
+    --output text --region $REGION 2>/dev/null | sed 's|/hostedzone/||')
+
+  if [ -z "$ZONE_ID" ] || [ "$ZONE_ID" = "None" ]; then
+    echo "  No hosted zone found — skipping"
+    return 0
+  fi
+
+  echo "  Found hosted zone: $ZONE_ID"
+
+  local RECORDS=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" \
+    --query "ResourceRecordSets[?Type!='NS' && Type!='SOA']" --output json 2>/dev/null)
+
+  local RECORD_COUNT=$(echo "$RECORDS" | grep -c '"Name"' 2>/dev/null || echo "0")
+
+  if [ "$RECORD_COUNT" -eq 0 ] || [ "$RECORD_COUNT" = "0" ]; then
+    echo "  No extra records to delete"
+    return 0
+  fi
+
+  echo "  Deleting $RECORD_COUNT records..."
+
+  # Try python3 first, fall back to python (Windows compatibility)
+  local CHANGE_BATCH=$(echo "$RECORDS" | python3 -c "
+import json, sys
+records = json.load(sys.stdin)
+changes = [{'Action':'DELETE','ResourceRecordSet':r} for r in records]
+if changes: print(json.dumps({'Changes': changes}))
+" 2>/dev/null || echo "$RECORDS" | python -c "
+import json, sys
+records = json.load(sys.stdin)
+changes = [{'Action':'DELETE','ResourceRecordSet':r} for r in records]
+if changes: print(json.dumps({'Changes': changes}))
+" 2>/dev/null || echo "")
+
+  if [ -n "$CHANGE_BATCH" ]; then
+    echo "$CHANGE_BATCH" | aws route53 change-resource-record-sets \
+      --hosted-zone-id "$ZONE_ID" --change-batch file:///dev/stdin 2>/dev/null \
+      && echo "  Records deleted successfully" \
+      || echo "  Record deletion failed — may need manual cleanup"
+    sleep 10
+  else
+    echo "  Could not build change batch — python may not be available"
+  fi
+}
+
 # ──────────────────────────────────────────────
 #  Phase 1: ArgoCD Applications
 # ──────────────────────────────────────────────
 echo -e "${YELLOW}[1/9] Deleting ArgoCD applications...${NC}"
-# Remove finalizers first to prevent hanging
 for app in $(kubectl get applications -n argocd -o name 2>/dev/null); do
   kubectl patch $app -n argocd -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null
 done
@@ -54,12 +111,13 @@ kubectl delete applications --all -n argocd --timeout=60s 2>/dev/null || echo " 
 # ──────────────────────────────────────────────
 echo -e "${YELLOW}[2/9] Deleting monitoring stack...${NC}"
 
-# Uninstall Helm release FIRST (removes Prometheus/Alertmanager instances)
+# Uninstall Helm release FIRST
 helm uninstall monitoring -n monitoring 2>/dev/null || echo "  No monitoring Helm release"
 
-# Delete Prometheus/Alertmanager custom resources
+# Delete custom resources before CRDs
 kubectl delete prometheuses --all -n monitoring 2>/dev/null
 kubectl delete alertmanagers --all -n monitoring 2>/dev/null
+kubectl delete thanosrulers --all -n monitoring 2>/dev/null
 
 # Delete ALL monitoring CRDs (removes finalizers that block namespace deletion)
 echo "  Cleaning up monitoring CRDs..."
@@ -72,10 +130,10 @@ for crd in prometheuses.monitoring.coreos.com \
            podmonitors.monitoring.coreos.com \
            prometheusrules.monitoring.coreos.com \
            probes.monitoring.coreos.com; do
-  kubectl delete crd "$crd" 2>/dev/null && echo "  Deleted CRD: $crd"
+  kubectl delete crd "$crd" 2>/dev/null && echo "    Deleted: $crd"
 done
 
-# Force delete monitoring namespace if stuck
+# Force delete monitoring namespace
 kubectl patch namespace monitoring -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null
 kubectl delete namespace monitoring --timeout=30s 2>/dev/null || echo "  Monitoring namespace already gone"
 sleep 10
@@ -94,53 +152,21 @@ kubectl delete namespace argocd --timeout=30s 2>/dev/null || echo "  ArgoCD name
 #  Phase 4: Application Resources
 # ──────────────────────────────────────────────
 echo -e "${YELLOW}[4/9] Deleting application resources...${NC}"
-kubectl delete ingress --all -n three-tier 2>/dev/null || echo "  No ingress found"
+kubectl delete ingress --all -n three-tier 2>/dev/null || echo "  No app ingress found"
 kubectl delete ingress --all -n monitoring 2>/dev/null || echo "  No monitoring ingress found"
 echo "  Waiting 60s for ALB cleanup..."
 sleep 60
 kubectl delete all --all -n three-tier 2>/dev/null || echo "  Namespace already clean"
 kubectl delete pvc --all -n three-tier 2>/dev/null || echo "  No PVCs found"
 kubectl delete secrets --all -n three-tier 2>/dev/null || echo "  No secrets found"
+kubectl patch namespace three-tier -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null
+kubectl delete namespace three-tier --timeout=30s 2>/dev/null || echo "  three-tier namespace already gone"
 
 # ──────────────────────────────────────────────
-#  Phase 5: Route 53 Record Cleanup
+#  Phase 5: Route 53 Record Cleanup (first pass)
 # ──────────────────────────────────────────────
-echo -e "${YELLOW}[5/9] Cleaning up Route 53 records...${NC}"
-ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='platinum-consults.com.'].Id" --output text --region $REGION 2>/dev/null | sed 's|/hostedzone/||')
-
-if [ -n "$ZONE_ID" ] && [ "$ZONE_ID" != "None" ]; then
-  echo "  Found hosted zone: $ZONE_ID"
-  
-  # Get all non-essential records and delete them
-  RECORDS=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" \
-    --query "ResourceRecordSets[?Type!='NS' && Type!='SOA']" --output json 2>/dev/null)
-  
-  RECORD_COUNT=$(echo "$RECORDS" | grep -c '"Name"' 2>/dev/null || echo "0")
-  
-  if [ "$RECORD_COUNT" -gt 0 ]; then
-    echo "  Deleting $RECORD_COUNT records..."
-    
-    # Build change batch
-    CHANGE_BATCH=$(echo "$RECORDS" | python -c "
-import json, sys
-records = json.load(sys.stdin)
-changes = [{'Action':'DELETE','ResourceRecordSet':r} for r in records]
-print(json.dumps({'Changes': changes}))
-" 2>/dev/null || echo "")
-    
-    if [ -n "$CHANGE_BATCH" ]; then
-      echo "$CHANGE_BATCH" | aws route53 change-resource-record-sets \
-        --hosted-zone-id "$ZONE_ID" --change-batch file:///dev/stdin 2>/dev/null \
-        && echo "  Records deleted" \
-        || echo "  Record deletion failed — may need manual cleanup"
-    fi
-    sleep 10
-  else
-    echo "  No extra records to delete"
-  fi
-else
-  echo "  No hosted zone found — skipping"
-fi
+echo -e "${YELLOW}[5/9] Cleaning up Route 53 records (first pass)...${NC}"
+clean_route53_records
 
 # ──────────────────────────────────────────────
 #  Phase 6: VPC Dependency Cleanup
@@ -152,17 +178,15 @@ VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=cloud-native-e
 
 if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
   echo "  Found VPC: $VPC_ID"
-  
+
   # Delete load balancers
   for ALB_ARN in $(aws elbv2 describe-load-balancers --region $REGION \
     --query "LoadBalancers[?VpcId=='$VPC_ID'].LoadBalancerArn" --output text 2>/dev/null); do
     echo "  Deleting ALB: $ALB_ARN"
     aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" --region $REGION 2>/dev/null
   done
-  
-  # Wait for ALBs to fully delete
   sleep 30
-  
+
   # Delete ENIs
   for ENI_ID in $(aws ec2 describe-network-interfaces \
     --filters "Name=vpc-id,Values=$VPC_ID" \
@@ -170,7 +194,7 @@ if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
     echo "  Deleting ENI: $ENI_ID"
     aws ec2 delete-network-interface --network-interface-id "$ENI_ID" --region $REGION 2>/dev/null
   done
-  
+
   # Delete non-default security groups
   for SG_ID in $(aws ec2 describe-security-groups \
     --filters "Name=vpc-id,Values=$VPC_ID" \
@@ -186,25 +210,29 @@ fi
 #  Phase 7: EKS Infrastructure (Terraform)
 # ──────────────────────────────────────────────
 echo -e "${YELLOW}[7/9] Destroying EKS infrastructure (Terraform)...${NC}"
-if [ -d "EKS-Terraform" ]; then
-  cd EKS-Terraform
-  
-  # Remove stuck resources from state
+EKS_DIR=""
+if [ -d "EKS-Terraform" ]; then EKS_DIR="EKS-Terraform"
+elif [ -d "../EKS-Terraform" ]; then EKS_DIR="../EKS-Terraform"
+fi
+
+if [ -n "$EKS_DIR" ]; then
+  cd "$EKS_DIR"
+
+  # Remove resources that were already deleted or will cause timeout
   terraform state rm kubernetes_namespace.monitoring 2>/dev/null
   terraform state rm kubernetes_namespace.argocd 2>/dev/null
   terraform state rm kubernetes_namespace.three_tier 2>/dev/null
-  
+  terraform state rm helm_release.monitoring 2>/dev/null
+
   terraform init 2>/dev/null
-  terraform destroy -auto-approve || echo "  Terraform destroy had errors — check manually"
-  cd ..
-elif [ -d "../EKS-Terraform" ]; then
-  cd ../EKS-Terraform
-  terraform state rm kubernetes_namespace.monitoring 2>/dev/null
-  terraform state rm kubernetes_namespace.argocd 2>/dev/null
-  terraform state rm kubernetes_namespace.three_tier 2>/dev/null
-  terraform init 2>/dev/null
-  terraform destroy -auto-approve || echo "  Terraform destroy had errors — check manually"
-  cd ..
+
+  # Clean Route 53 records AGAIN right before destroy
+  # ExternalDNS may have recreated records between Phase 5 and now
+  echo "  Cleaning Route 53 records before Terraform destroy (second pass)..."
+  clean_route53_records
+
+  terraform destroy -auto-approve || echo "  Terraform destroy had errors"
+  cd - > /dev/null
 else
   echo "  EKS-Terraform directory not found — skipping"
 fi
@@ -222,26 +250,28 @@ aws ecr delete-repository --repository-name backend --region $REGION --force 2>/
 #  Phase 9: Jenkins Server (Terraform)
 # ──────────────────────────────────────────────
 echo -e "${YELLOW}[9/9] Destroying Jenkins server (Terraform)...${NC}"
-if [ -d "Jenkins-Server-TF" ]; then
-  cd Jenkins-Server-TF
+JENKINS_DIR=""
+if [ -d "Jenkins-Server-TF" ]; then JENKINS_DIR="Jenkins-Server-TF"
+elif [ -d "../Jenkins-Server-TF" ]; then JENKINS_DIR="../Jenkins-Server-TF"
+fi
+
+if [ -n "$JENKINS_DIR" ]; then
+  cd "$JENKINS_DIR"
   terraform init 2>/dev/null
-  terraform destroy -auto-approve || echo "  Terraform destroy had errors — check manually"
-  cd ..
-elif [ -d "../Jenkins-Server-TF" ]; then
-  cd ../Jenkins-Server-TF
-  terraform init 2>/dev/null
-  terraform destroy -auto-approve || echo "  Terraform destroy had errors — check manually"
-  cd ..
+  terraform destroy -auto-approve || echo "  Terraform destroy had errors"
+  cd - > /dev/null
 else
   echo "  Jenkins-Server-TF directory not found — skipping"
 fi
 
 # ──────────────────────────────────────────────
-#  Final Cleanup Check
+#  Final Verification
 # ──────────────────────────────────────────────
 echo ""
 echo -e "${YELLOW}Running final verification...${NC}"
 echo ""
+
+ALL_CLEAN=true
 
 INSTANCES=$(aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" \
   --query "Reservations[].Instances[].InstanceId" --output text --region $REGION 2>/dev/null)
@@ -255,49 +285,12 @@ NATS=$(aws ec2 describe-nat-gateways --filter "Name=state,Values=available" \
 EIPS=$(aws ec2 describe-addresses --query "Addresses[].AllocationId" \
   --output text --region $REGION 2>/dev/null)
 
-ALL_CLEAN=true
-
-if [ -n "$INSTANCES" ]; then
-  echo -e "  ${RED}⚠ Running instances found: $INSTANCES${NC}"
-  ALL_CLEAN=false
-else
-  echo -e "  ${GREEN}✅ No running instances${NC}"
-fi
-
-if [ -n "$CLUSTERS" ]; then
-  echo -e "  ${RED}⚠ EKS clusters found: $CLUSTERS${NC}"
-  ALL_CLEAN=false
-else
-  echo -e "  ${GREEN}✅ No EKS clusters${NC}"
-fi
-
-if [ -n "$VPCS" ]; then
-  echo -e "  ${RED}⚠ Non-default VPCs found: $VPCS${NC}"
-  ALL_CLEAN=false
-else
-  echo -e "  ${GREEN}✅ No custom VPCs${NC}"
-fi
-
-if [ -n "$ELBS" ]; then
-  echo -e "  ${RED}⚠ Load balancers found: $ELBS${NC}"
-  ALL_CLEAN=false
-else
-  echo -e "  ${GREEN}✅ No load balancers${NC}"
-fi
-
-if [ -n "$NATS" ]; then
-  echo -e "  ${RED}⚠ NAT gateways found: $NATS${NC}"
-  ALL_CLEAN=false
-else
-  echo -e "  ${GREEN}✅ No NAT gateways${NC}"
-fi
-
-if [ -n "$EIPS" ]; then
-  echo -e "  ${RED}⚠ Elastic IPs found: $EIPS${NC}"
-  ALL_CLEAN=false
-else
-  echo -e "  ${GREEN}✅ No Elastic IPs${NC}"
-fi
+[ -n "$INSTANCES" ] && echo -e "  ${RED}⚠ Running instances: $INSTANCES${NC}" && ALL_CLEAN=false || echo -e "  ${GREEN}✅ No running instances${NC}"
+[ -n "$CLUSTERS" ] && echo -e "  ${RED}⚠ EKS clusters: $CLUSTERS${NC}" && ALL_CLEAN=false || echo -e "  ${GREEN}✅ No EKS clusters${NC}"
+[ -n "$VPCS" ] && echo -e "  ${RED}⚠ Non-default VPCs: $VPCS${NC}" && ALL_CLEAN=false || echo -e "  ${GREEN}✅ No custom VPCs${NC}"
+[ -n "$ELBS" ] && echo -e "  ${RED}⚠ Load balancers: $ELBS${NC}" && ALL_CLEAN=false || echo -e "  ${GREEN}✅ No load balancers${NC}"
+[ -n "$NATS" ] && echo -e "  ${RED}⚠ NAT gateways: $NATS${NC}" && ALL_CLEAN=false || echo -e "  ${GREEN}✅ No NAT gateways${NC}"
+[ -n "$EIPS" ] && echo -e "  ${RED}⚠ Elastic IPs: $EIPS${NC}" && ALL_CLEAN=false || echo -e "  ${GREEN}✅ No Elastic IPs${NC}"
 
 echo ""
 if [ "$ALL_CLEAN" = true ]; then
@@ -306,13 +299,11 @@ if [ "$ALL_CLEAN" = true ]; then
   echo "╚══════════════════════════════════════════════════╝${NC}"
 else
   echo -e "${RED}╔══════════════════════════════════════════════════╗"
-  echo "║   DESTROY COMPLETE — SOME RESOURCES REMAIN       ║"
-  echo "║   Check items marked with ⚠ above                ║"
+  echo "║   SOME RESOURCES REMAIN — CHECK ITEMS ABOVE      ║"
   echo "╚══════════════════════════════════════════════════╝${NC}"
 fi
-
 echo ""
-echo "Note: S3 bucket and DynamoDB table are preserved for future deployments."
-echo "To delete them permanently:"
+echo "S3 bucket and DynamoDB table preserved for future deployments."
+echo "To delete permanently:"
 echo "  aws s3 rb s3://ibrahim-cloud-native-tf-state --force"
 echo "  aws dynamodb delete-table --table-name ibrahim-cloud-native-tf-lock --region $REGION"
