@@ -260,9 +260,37 @@ if [ -n "$JENKINS_DIR" ]; then
   terraform init 2>/dev/null
   terraform destroy -auto-approve || echo "  Terraform destroy had errors"
   cd - > /dev/null
-else
-  echo "  Jenkins-Server-TF directory not found — skipping"
 fi
+
+# Clean up any orphan Jenkins resources that Terraform missed
+echo "  Cleaning orphan Jenkins resources..."
+
+# Delete instance profile
+aws iam remove-role-from-instance-profile \
+  --instance-profile-name jenkins-cloud-native-profile \
+  --role-name jenkins-cloud-native-role --region $REGION 2>/dev/null
+aws iam delete-instance-profile \
+  --instance-profile-name jenkins-cloud-native-profile --region $REGION 2>/dev/null
+
+# Detach policies and delete role
+for ARN in $(aws iam list-attached-role-policies --role-name jenkins-cloud-native-role \
+  --query "AttachedPolicies[].PolicyArn" --output text 2>/dev/null); do
+  aws iam detach-role-policy --role-name jenkins-cloud-native-role --policy-arn "$ARN" 2>/dev/null
+done
+for NAME in $(aws iam list-role-policies --role-name jenkins-cloud-native-role \
+  --query "PolicyNames[]" --output text 2>/dev/null); do
+  aws iam delete-role-policy --role-name jenkins-cloud-native-role --policy-name "$NAME" 2>/dev/null
+done
+aws iam delete-role --role-name jenkins-cloud-native-role --region $REGION 2>/dev/null
+
+# Delete security group
+SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=jenkins-cloud-native-sg" \
+  --query "SecurityGroups[0].GroupId" --output text --region $REGION 2>/dev/null)
+if [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ]; then
+  aws ec2 delete-security-group --group-id "$SG_ID" --region $REGION 2>/dev/null
+fi
+
+echo "  Jenkins cleanup complete"
 
 # ──────────────────────────────────────────────
 #  Final Verification
