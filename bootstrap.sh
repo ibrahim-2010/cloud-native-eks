@@ -84,6 +84,21 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "  Account: $ACCOUNT_ID"
 echo "  Region: $REGION"
 
+# ─── Clean orphan Jenkins resources from previous deployments ────────────────
+echo -e "${YELLOW}[6/6] Cleaning orphan Jenkins resources...${NC}"
+aws iam remove-role-from-instance-profile --instance-profile-name jenkins-cloud-native-profile --role-name jenkins-cloud-native-role 2>/dev/null
+aws iam delete-instance-profile --instance-profile-name jenkins-cloud-native-profile 2>/dev/null
+for ARN in $(aws iam list-attached-role-policies --role-name jenkins-cloud-native-role --query "AttachedPolicies[].PolicyArn" --output text 2>/dev/null); do
+  aws iam detach-role-policy --role-name jenkins-cloud-native-role --policy-arn "$ARN" 2>/dev/null
+done
+for NAME in $(aws iam list-role-policies --role-name jenkins-cloud-native-role --query "PolicyNames[]" --output text 2>/dev/null); do
+  aws iam delete-role-policy --role-name jenkins-cloud-native-role --policy-name "$NAME" 2>/dev/null
+done
+aws iam delete-role --role-name jenkins-cloud-native-role 2>/dev/null
+SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=jenkins-cloud-native-sg" --query "SecurityGroups[0].GroupId" --output text --region us-east-1 2>/dev/null)
+[ -n "$SG_ID" ] && [ "$SG_ID" != "None" ] && aws ec2 delete-security-group --group-id "$SG_ID" --region us-east-1 2>/dev/null
+echo "  Orphan cleanup complete"
+
 # ─── Summary ────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════╗"

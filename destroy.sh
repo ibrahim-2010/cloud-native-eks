@@ -333,5 +333,5 @@ fi
 echo ""
 echo "S3 bucket and DynamoDB table preserved for future deployments."
 echo "To delete permanently:"
-echo "  aws s3 rb s3://ibrahim-cloud-native-tf-state --force"
+echo "  aws s3api delete-objects --bucket ibrahim-cloud-native-tf-state --delete "$(aws s3api list-object-versions --bucket ibrahim-cloud-native-tf-state --query '{Objects: [Versions,DeleteMarkers][].{Key:Key,VersionId:VersionId}}' --output json)" && aws s3 rb s3://ibrahim-cloud-native-tf-state"
 echo "  aws dynamodb delete-table --table-name ibrahim-cloud-native-tf-lock --region $REGION"
