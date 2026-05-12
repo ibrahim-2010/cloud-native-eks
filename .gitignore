@@ -39,3 +39,4 @@ Thumbs.db
 secrets/
 *.key
 *.crt
+*-secret.yaml

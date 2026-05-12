@@ -1,19 +1,4 @@
 apiVersion: v1
-kind: Secret
-metadata:
-  name: postgres-secret
-  namespace: three-tier
-type: Opaque
-data:
-  # base64 encoded values — replace with your own before deploying
-  # echo -n 'admin' | base64 → YWRtaW4=
-  # echo -n 'password123' | base64 → cGFzc3dvcmQxMjM=
-  # echo -n 'cloudnative' | base64 → Y2xvdWRuYXRpdmU=
-  POSTGRES_USER: YWRtaW4=
-  POSTGRES_PASSWORD: cGFzc3dvcmQxMjM=
-  POSTGRES_DB: Y2xvdWRuYXRpdmU=
----
-apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgres-pvc
@@ -70,9 +55,9 @@ spec:
               command:
                 - pg_isready
                 - -U
-                - admin
+                - $(POSTGRES_USER)
                 - -d
-                - cloudnative
+                - $(POSTGRES_DB)
             initialDelaySeconds: 10
             periodSeconds: 5
           livenessProbe:
@@ -80,9 +65,9 @@ spec:
               command:
                 - pg_isready
                 - -U
-                - admin
+                - $(POSTGRES_USER)
                 - -d
-                - cloudnative
+                - $(POSTGRES_DB)
             initialDelaySeconds: 30
             periodSeconds: 10
       volumes:
