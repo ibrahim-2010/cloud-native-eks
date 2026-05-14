@@ -180,6 +180,16 @@ else
   echo "  AWS CLI: using EC2 instance role (no credentials file written)"
 fi
 
+# ─── Download full JCasC config from GitHub ──────────────────────────────────
+# tools-install.sh writes a minimal 2-job config. This replaces it with the
+# full jenkins.yaml (8 jobs + credentials) from the platform repo.
+echo -e "${YELLOW}Downloading full JCasC config from GitHub...${NC}"
+sudo wget -q -O /var/lib/jenkins/casc_configs/jenkins.yaml \
+  "https://raw.githubusercontent.com/ibrahim-2010/cloud-native-eks/main/Jenkins-Server-TF/jcasc/jenkins.yaml" \
+  && echo "  jenkins.yaml downloaded (8 jobs)" \
+  || echo -e "${RED}  WARNING: Download failed — Jenkins will start with minimal 2-job config${NC}"
+sudo chown jenkins:jenkins /var/lib/jenkins/casc_configs/jenkins.yaml
+
 # ─── Restart Jenkins ─────────────────────────────────────────────────────────
 echo -e "${YELLOW}Restarting Jenkins...${NC}"
 sudo systemctl daemon-reload
