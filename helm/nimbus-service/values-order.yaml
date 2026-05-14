@@ -2,7 +2,7 @@ serviceName: order-service
 
 image:
   repository: 022374769206.dkr.ecr.us-east-1.amazonaws.com/nimbus/order-service
-  tag: "latest"
+  tag: "1"
 
 service:
   port: 3004
