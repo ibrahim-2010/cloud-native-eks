@@ -59,3 +59,14 @@ resource "kubernetes_namespace" "argocd" {
 
   depends_on = [aws_eks_node_group.main]
 }
+
+resource "kubernetes_namespace" "nimbus" {
+  metadata {
+    name = "nimbus"
+    labels = {
+      project = "cloud-native-eks"
+    }
+  }
+
+  depends_on = [aws_eks_node_group.main]
+}

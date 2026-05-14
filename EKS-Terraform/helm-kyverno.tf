@@ -21,5 +21,8 @@ resource "helm_release" "kyverno" {
     value = "1"
   }
 
-  depends_on = [aws_eks_node_group.main]
+  depends_on = [
+    aws_eks_node_group.main,
+    helm_release.alb_controller,
+  ]
 }

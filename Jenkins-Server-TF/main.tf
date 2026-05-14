@@ -129,6 +129,20 @@ resource "aws_iam_role_policy" "eks_full_access" {
   })
 }
 
+resource "aws_iam_role_policy" "nimbus_infra_access" {
+  name = "NimbusInfraAccess"
+  role = aws_iam_role.jenkins_role.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["rds:*", "elasticache:*"]
+      Resource = "*"
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "jenkins_profile" {
   name = "jenkins-cloud-native-profile"
   role = aws_iam_role.jenkins_role.name

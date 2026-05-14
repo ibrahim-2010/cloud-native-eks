@@ -27,5 +27,6 @@ resource "helm_release" "eso" {
   depends_on = [
     aws_eks_node_group.main,
     aws_iam_role_policy_attachment.eso_secrets,
+    kubernetes_namespace.nimbus,
   ]
 }

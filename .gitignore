@@ -2,6 +2,7 @@
 *.tfstate
 *.tfstate.backup
 *.tfvars
+!EKS-Terraform/nimbus.tfvars
 .terraform/
 .terraform.lock.hcl
 crash.log
