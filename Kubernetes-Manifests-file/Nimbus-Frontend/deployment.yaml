@@ -1,0 +1,163 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-html
+  namespace: nimbus
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <title>NimbusRetail</title>
+      <style>
+        body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 2em auto; padding: 0 1em; color: #222; }
+        h1 { color: #1F4E79; }
+        section { border: 1px solid #ddd; padding: 1em; margin: 1em 0; border-radius: 6px; }
+        button { background: #2E75B6; color: white; border: 0; padding: 0.5em 1em; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #1F4E79; }
+        input { padding: 0.5em; width: 220px; margin-right: 0.5em; }
+        pre { background: #f5f5f5; padding: 0.75em; border-radius: 4px; overflow-x: auto; font-size: 13px; }
+        .product { padding: 0.5em; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
+        .muted { color: #777; font-size: 13px; }
+      </style>
+    </head>
+    <body>
+      <h1>NimbusRetail</h1>
+      <p class="muted">A minimal frontend to exercise the backend services. Open DevTools to see the network calls.</p>
+
+      <section>
+        <h2>1. Register or log in</h2>
+        <input id="email" placeholder="email" value="alice@example.com">
+        <input id="password" type="password" placeholder="password" value="alicepass123">
+        <button onclick="register()">Register</button>
+        <button onclick="login()">Log in</button>
+        <pre id="auth-out"></pre>
+      </section>
+
+      <section>
+        <h2>2. Browse catalog</h2>
+        <button onclick="loadProducts()">Load products</button>
+        <div id="products"></div>
+      </section>
+
+      <section>
+        <h2>3. Place an order</h2>
+        <button onclick="placeOrder()">Place order</button>
+        <pre id="order-out"></pre>
+        <p class="muted">After placing an order, check the notification-service logs to see the confirmation email get dispatched via Kafka.</p>
+      </section>
+
+    <script>
+    const AUTH = '';
+    const CATALOG = '';
+    const CART = '';
+    const ORDER = '';
+
+    let token = null;
+
+    async function register() {
+      const r = await fetch(AUTH + '/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.value, password: password.value }),
+      });
+      document.getElementById('auth-out').textContent = await r.text();
+    }
+
+    async function login() {
+      const r = await fetch(AUTH + '/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.value, password: password.value }),
+      });
+      const body = await r.json();
+      token = body.token;
+      document.getElementById('auth-out').textContent = JSON.stringify(body, null, 2);
+    }
+
+    async function loadProducts() {
+      const r = await fetch(CATALOG + '/products');
+      const products = await r.json();
+      const html = products.map(p => `
+        <div class="product">
+          <span>${p.name} <span class="muted">($${(p.price_cents/100).toFixed(2)})</span></span>
+          <button onclick="addToCart('${p.id}')">Add to cart</button>
+        </div>
+      `).join('');
+      document.getElementById('products').innerHTML = html;
+    }
+
+    async function addToCart(productId) {
+      if (!token) return alert('Log in first');
+      await fetch(CART + '/cart/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ productId, quantity: 1 }),
+      });
+      alert('Added ' + productId);
+    }
+
+    async function placeOrder() {
+      if (!token) return alert('Log in first');
+      const r = await fetch(ORDER + '/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      });
+      document.getElementById('order-out').textContent = JSON.stringify(await r.json(), null, 2);
+    }
+    </script>
+    </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: nimbus
+  labels:
+    app: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "25m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+      volumes:
+        - name: html
+          configMap:
+            name: frontend-html
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: nimbus
+  labels:
+    app: frontend
+spec:
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP
