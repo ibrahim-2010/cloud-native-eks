@@ -1,0 +1,127 @@
+# NetworkPolicies for the nimbus namespace
+# Zero-trust baseline: default-deny-all, then explicit allow rules.
+# AWS managed service access (RDS, ElastiCache) is governed by EC2 security
+# groups set in Terraform — NetworkPolicies only control pod-to-pod traffic.
+
+# ── 1. Default deny: block all ingress and egress ─────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: nimbus
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+# ── 2. Allow DNS resolution (required by every pod) ───────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: nimbus
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+# ── 3. Allow egress to AWS managed services ───────────────────────────────────
+#  RDS PostgreSQL  : 5432
+#  ElastiCache Redis: 6379
+#  AWS APIs (HTTPS): 443  (Secrets Manager, ECR, etc.)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-aws-egress
+  namespace: nimbus
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 5432
+        - port: 6379
+        - port: 443
+
+# ── 4. Allow egress to Kafka in the kafka namespace ───────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kafka-egress
+  namespace: nimbus
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kafka
+      ports:
+        - port: 9092
+
+# ── 5. Allow pod-to-pod traffic within nimbus ─────────────────────────────────
+#  Required for: order-service → cart-service (HTTP on port 3003)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: nimbus
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+
+# ── 6. Allow ingress from ALB (internet-facing traffic) ───────────────────────
+#  AWS ALB uses dynamic IPs from the VPC. Allowing from anywhere is standard
+#  practice; the ALB itself enforces security via listener rules and TLS.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-alb-ingress
+  namespace: nimbus
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - {}
+
+# ── 7. Allow Prometheus scraping from the monitoring namespace ────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring-ingress
+  namespace: nimbus
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring

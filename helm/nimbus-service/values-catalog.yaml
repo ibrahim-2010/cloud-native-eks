@@ -1,0 +1,37 @@
+serviceName: catalog-service
+
+image:
+  repository: 022374769206.dkr.ecr.us-east-1.amazonaws.com/nimbus/catalog-service
+  tag: "latest"
+
+service:
+  port: 3002
+  targetPort: 3002
+
+# catalog-service uses postgresql:// prefix (asyncpg driver requirement).
+# DATABASE_URL and REDIS_URL come from nimbus-catalog-secrets.
+# kubectl create secret generic nimbus-catalog-secrets -n nimbus \
+#   --from-literal=DATABASE_URL=postgresql://postgres:<pass>@<rds-endpoint>:5432/nimbus \
+#   --from-literal=REDIS_URL=redis://<elasticache-endpoint>:6379
+envFromSecrets:
+  - nimbus-catalog-secrets
+
+env:
+  - name: PORT
+    value: "3002"
+  - name: SERVICE_NAME
+    value: "catalog-service"
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "300m"
+
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70

@@ -1,0 +1,199 @@
+// ══════════════════════════════════════════════════════════════
+//  NimbusRetail — Infrastructure Pipeline
+//
+//  Deploys the full EKS platform from the Jenkins server:
+//    1. EKS cluster + RDS + Redis + Kafka (Strimzi) + ESO +
+//       Kyverno + Loki + Tempo + Prometheus/Grafana + ECR + IRSA
+//    2. Configures kubectl for the jenkins user
+//    3. Populates AWS Secrets Manager (idempotent — skips if exists)
+//    4. Installs ArgoCD
+//    5. Deploys app-of-apps → ArgoCD syncs all Nimbus apps
+//
+//  Prerequisites (run once locally before this pipeline):
+//    - bootstrap.sh  — creates S3 bucket, DynamoDB table, key pair
+//    - Jenkins-Server-TF/terraform apply  — provisions this EC2
+//    - setup-jcasc.sh  — configures Jenkins credentials and jobs
+//
+//  Safe to re-run — Terraform and kubectl apply are idempotent.
+//  After this pipeline succeeds, trigger the 5 Nimbus service jobs.
+// ══════════════════════════════════════════════════════════════
+
+pipeline {
+    agent any
+
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        CLUSTER_NAME       = 'nimbus-cluster'
+        PLATFORM_REPO      = 'https://github.com/ibrahim-2010/cloud-native-eks.git'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: env.PLATFORM_REPO,
+                    credentialsId: 'github-creds'
+            }
+        }
+
+        // ── EKS + RDS + Redis + Kafka operator + ESO + Kyverno + observability ──
+        stage('Terraform Init') {
+            steps {
+                dir('EKS-Terraform') {
+                    sh 'terraform init'
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                dir('EKS-Terraform') {
+                    sh 'terraform plan -var-file="nimbus.tfvars" -out=tfplan'
+                }
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                dir('EKS-Terraform') {
+                    sh 'terraform apply tfplan'
+                }
+            }
+        }
+
+        // ── Write kubeconfig for the jenkins user (~ = /var/lib/jenkins) ────────
+        stage('Configure kubectl') {
+            steps {
+                sh """
+                    mkdir -p ~/.kube
+                    aws eks update-kubeconfig \\
+                        --name ${CLUSTER_NAME} \\
+                        --region ${AWS_DEFAULT_REGION}
+                    kubectl get nodes
+                """
+            }
+        }
+
+        // ── Create app secrets in Secrets Manager (idempotent) ──────────────────
+        stage('Populate Secrets Manager') {
+            steps {
+                dir('EKS-Terraform') {
+                    sh '''
+                        DB_SECRET_ARN=$(terraform output -raw db_secret_arn)
+                        DB_PASS=$(aws secretsmanager get-secret-value \
+                            --secret-id "$DB_SECRET_ARN" \
+                            --query SecretString --output text)
+                        RDS_HOST=$(terraform output -raw rds_endpoint)
+                        REDIS_HOST=$(terraform output -raw redis_endpoint)
+
+                        # nimbus-secrets — auth, cart, order services (postgres:// prefix)
+                        if aws secretsmanager describe-secret \
+                                --secret-id nimbus-cluster/nimbus-secrets \
+                                --region us-east-1 > /dev/null 2>&1; then
+                            echo "nimbus-secrets already exists — skipping"
+                        else
+                            JWT=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+                            SECRET_VAL=$(python3 -c "
+import sys, json
+print(json.dumps({
+    'JWT_SECRET':   sys.argv[1],
+    'DATABASE_URL': 'postgres://postgres:' + sys.argv[2] + '@' + sys.argv[3] + '/nimbus',
+    'REDIS_URL':    'redis://' + sys.argv[4] + ':6379'
+}))" "$JWT" "$DB_PASS" "$RDS_HOST" "$REDIS_HOST")
+                            aws secretsmanager create-secret \
+                                --name nimbus-cluster/nimbus-secrets \
+                                --region us-east-1 \
+                                --secret-string "$SECRET_VAL"
+                            echo "nimbus-secrets created"
+                        fi
+
+                        # nimbus-catalog-secrets — catalog only (postgresql:// for asyncpg)
+                        if aws secretsmanager describe-secret \
+                                --secret-id nimbus-cluster/nimbus-catalog-secrets \
+                                --region us-east-1 > /dev/null 2>&1; then
+                            echo "nimbus-catalog-secrets already exists — skipping"
+                        else
+                            CATALOG_VAL=$(python3 -c "
+import sys, json
+print(json.dumps({
+    'DATABASE_URL': 'postgresql://postgres:' + sys.argv[1] + '@' + sys.argv[2] + '/nimbus',
+    'REDIS_URL':    'redis://' + sys.argv[3] + ':6379'
+}))" "$DB_PASS" "$RDS_HOST" "$REDIS_HOST")
+                            aws secretsmanager create-secret \
+                                --name nimbus-cluster/nimbus-catalog-secrets \
+                                --region us-east-1 \
+                                --secret-string "$CATALOG_VAL"
+                            echo "nimbus-catalog-secrets created"
+                        fi
+                    '''
+                }
+            }
+        }
+
+        // ── Install ArgoCD (kubectl apply is idempotent) ─────────────────────────
+        stage('Install ArgoCD') {
+            steps {
+                sh '''
+                    kubectl get namespace argocd 2>/dev/null \
+                        || kubectl create namespace argocd
+
+                    kubectl apply -n argocd \
+                        -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml \
+                        --server-side --force-conflicts
+
+                    echo "Waiting for argocd-server to be ready..."
+                    kubectl wait --for=condition=available deploy/argocd-server \
+                        -n argocd --timeout=300s
+
+                    echo ""
+                    echo "ArgoCD initial admin password:"
+                    kubectl get secret argocd-initial-admin-secret -n argocd \
+                        -o jsonpath='{.data.password}' | base64 -d
+                    echo ""
+                '''
+            }
+        }
+
+        // ── Bootstrap GitOps — ArgoCD watches argocd/apps/ for all child apps ───
+        stage('Deploy App-of-Apps') {
+            steps {
+                sh '''
+                    kubectl apply -f argocd/app-of-apps.yaml
+                    echo ""
+                    echo "Applications (syncing in background — Kafka takes ~5 min):"
+                    kubectl get applications -n argocd
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo """
+╔══════════════════════════════════════════════════════╗
+║        INFRASTRUCTURE PIPELINE COMPLETE               ║
+╠══════════════════════════════════════════════════════╣
+║                                                       ║
+║  EKS, RDS, Redis, Kafka (Strimzi), ESO, Kyverno,     ║
+║  Loki, Tempo, Prometheus/Grafana — all deployed.      ║
+║                                                       ║
+║  ArgoCD is syncing apps. Kafka takes ~5 min.          ║
+║                                                       ║
+║  Next — trigger the 5 Nimbus service build jobs:      ║
+║    nimbus-auth-service                                ║
+║    nimbus-catalog-service                             ║
+║    nimbus-cart-service                                ║
+║    nimbus-order-service                               ║
+║    nimbus-notification-service                        ║
+╚══════════════════════════════════════════════════════╝
+"""
+        }
+        failure {
+            echo '❌ Infrastructure pipeline failed — check stage logs above'
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

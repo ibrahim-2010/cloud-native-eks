@@ -1,0 +1,126 @@
+# Kyverno ClusterPolicies for NimbusRetail
+# Scope: nimbus namespace only (namespaceSelector on each policy)
+# Modes:
+#   enforce — hard block on admission, used for high-risk rules
+#   audit   — logs violation but allows admission, used to avoid breaking existing workloads
+
+# ── 1. Disallow privileged containers (enforce) ───────────────────────────────
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged-containers
+  annotations:
+    policies.kyverno.io/title: Disallow Privileged Containers
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >
+      Privileged containers share the host's kernel and can escape the container
+      boundary. Blocked in the nimbus namespace.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-privileged
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [nimbus]
+      validate:
+        message: "Privileged containers are not allowed in the nimbus namespace."
+        pattern:
+          spec:
+            containers:
+              - =(securityContext):
+                  =(privileged): "false"
+
+# ── 2. Require resource limits (enforce) ──────────────────────────────────────
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >
+      All containers must declare CPU and memory limits to prevent
+      a single pod from starving other workloads on the node.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [nimbus]
+      validate:
+        message: "CPU and memory limits are required for all containers in nimbus."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    memory: "?*"
+                    cpu: "?*"
+
+# ── 3. Disallow latest image tag (audit) ──────────────────────────────────────
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow Latest Tag
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >
+      Using :latest makes deployments non-deterministic and prevents
+      rollbacks. The Jenkins pipeline always tags images with the build number.
+      Set to audit so existing deployments are not blocked during roll-out.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: check-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [nimbus]
+      validate:
+        message: "Image tag ':latest' is not allowed. Use a specific build tag."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"
+
+# ── 4. Require app label (audit) ──────────────────────────────────────────────
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-app-label
+  annotations:
+    policies.kyverno.io/title: Require App Label
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >
+      All pods must carry an 'app' label so that NetworkPolicies,
+      ServiceMonitors, and dashboards can select them correctly.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: check-app-label
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [nimbus]
+      validate:
+        message: "Pods in the nimbus namespace must have an 'app' label."
+        pattern:
+          metadata:
+            labels:
+              app: "?*"

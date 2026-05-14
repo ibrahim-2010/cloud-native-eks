@@ -33,9 +33,15 @@ echo ""
 read -p "AWS Account ID (12 digits): " AWS_ACCOUNT_ID
 read -sp "Jenkins Admin Password: " JENKINS_ADMIN_PASSWORD
 echo ""
-read -p "AWS Access Key ID: " AWS_ACCESS_KEY_ID
-read -sp "AWS Secret Access Key: " AWS_SECRET_ACCESS_KEY
 echo ""
+echo -e "${YELLOW}AWS CLI credentials — press Enter to skip (EC2 instance role covers all permissions):${NC}"
+read -p "AWS Access Key ID (or Enter to skip): " AWS_ACCESS_KEY_ID
+if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+  read -sp "AWS Secret Access Key: " AWS_SECRET_ACCESS_KEY
+  echo ""
+else
+  AWS_SECRET_ACCESS_KEY=""
+fi
 
 # ─── Get IPs ─────────────────────────────────────────────────────────────────
 PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo "localhost")
@@ -133,38 +139,46 @@ sudo chown jenkins:jenkins /var/lib/jenkins/init.groovy.d/sonarqube.groovy
 # ─── AWS CLI for jenkins + root users ────────────────────────────────────────
 echo -e "${YELLOW}Configuring AWS CLI...${NC}"
 
-# Jenkins user
+# Always write the region config so AWS CLI knows the default region
 sudo mkdir -p /var/lib/jenkins/.aws
 sudo bash -c "cat > /var/lib/jenkins/.aws/config << EOF
 [default]
 region = us-east-1
 output = json
 EOF"
-sudo bash -c "cat > /var/lib/jenkins/.aws/credentials << EOF
-[default]
-aws_access_key_id = ${AWS_ACCESS_KEY_ID}
-aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}
-EOF"
 sudo chown -R jenkins:jenkins /var/lib/jenkins/.aws
-sudo chmod 600 /var/lib/jenkins/.aws/credentials
 
-# Root user
 mkdir -p ~/.aws
 cat > ~/.aws/config << EOF
 [default]
 region = us-east-1
 output = json
 EOF
-cat > ~/.aws/credentials << EOF
+
+if [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+  # Write explicit credentials (overrides instance role)
+  sudo bash -c "cat > /var/lib/jenkins/.aws/credentials << EOF
+[default]
+aws_access_key_id = ${AWS_ACCESS_KEY_ID}
+aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}
+EOF"
+  sudo chmod 600 /var/lib/jenkins/.aws/credentials
+  sudo chown -R jenkins:jenkins /var/lib/jenkins/.aws
+
+  cat > ~/.aws/credentials << EOF
 [default]
 aws_access_key_id = ${AWS_ACCESS_KEY_ID}
 aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}
 EOF
-chmod 600 ~/.aws/credentials
+  chmod 600 ~/.aws/credentials
 
-export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-export AWS_DEFAULT_REGION=us-east-1
+  export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+  export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+  export AWS_DEFAULT_REGION=us-east-1
+  echo "  AWS CLI: explicit credentials configured"
+else
+  echo "  AWS CLI: using EC2 instance role (no credentials file written)"
+fi
 
 # ─── Restart Jenkins ─────────────────────────────────────────────────────────
 echo -e "${YELLOW}Restarting Jenkins...${NC}"
@@ -199,8 +213,8 @@ if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ]; then
   echo "  ✅ 6 credentials (github-creds, github-token, ACCOUNT_ID, ECR repos, sonar)"
   echo "  ✅ SonarQube server (via Groovy init script)"
   echo "  ✅ SonarQube webhook (http://${PRIVATE_IP}:8080/sonarqube-webhook/)"
-  echo "  ✅ 2 pipeline jobs (three-tier-backend, three-tier-frontend)"
-  echo "  ✅ AWS CLI configured for jenkins + root users"
+  echo "  ✅ 8 pipeline jobs (three-tier-backend, three-tier-frontend, 5x nimbus-*-service, nimbus-infrastructure)"
+  echo "  ✅ AWS CLI configured (instance role or explicit credentials)"
   echo ""
   echo "Verify AWS: aws sts get-caller-identity"
 else

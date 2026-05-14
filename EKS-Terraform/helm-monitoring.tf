@@ -28,11 +28,11 @@ resource "helm_release" "monitoring" {
       prometheus = {
         prometheusSpec = {
           storageSpec = null
+          # Watch ServiceMonitors in ALL namespaces (nimbus, kafka, etc.)
+          serviceMonitorNamespaceSelector = {}
+          serviceMonitorSelector          = {}
           resources = {
-            requests = {
-              memory = "256Mi"
-              cpu    = "100m"
-            }
+            requests = { memory = "256Mi", cpu = "100m" }
           }
         }
       }
@@ -40,39 +40,41 @@ resource "helm_release" "monitoring" {
         alertmanagerSpec = {
           storage = null
           resources = {
-            requests = {
-              memory = "128Mi"
-              cpu    = "50m"
-            }
+            requests = { memory = "128Mi", cpu = "50m" }
           }
         }
       }
       grafana = {
-        service = {
-          type = "ClusterIP"
-        }
+        service       = { type = "ClusterIP" }
         adminPassword = "CloudNative2026!"
         resources = {
-          requests = {
-            memory = "128Mi"
-            cpu    = "50m"
-          }
+          requests = { memory = "128Mi", cpu = "50m" }
         }
+        additionalDataSources = [
+          {
+            name      = "Loki"
+            type      = "loki"
+            url       = "http://loki:3100"
+            access    = "proxy"
+            isDefault = false
+          },
+          {
+            name      = "Tempo"
+            type      = "tempo"
+            url       = "http://tempo:3100"
+            access    = "proxy"
+            isDefault = false
+          }
+        ]
       }
       prometheusOperator = {
         resources = {
-          requests = {
-            memory = "128Mi"
-            cpu    = "50m"
-          }
+          requests = { memory = "128Mi", cpu = "50m" }
         }
       }
       kube-state-metrics = {
         resources = {
-          requests = {
-            memory = "64Mi"
-            cpu    = "25m"
-          }
+          requests = { memory = "64Mi", cpu = "25m" }
         }
       }
     })

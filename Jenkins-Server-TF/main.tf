@@ -105,6 +105,10 @@ resource "aws_iam_role_policy_attachment" "jenkins_policies" {
     "arn:aws:iam::aws:policy/AmazonS3FullAccess",
     "arn:aws:iam::aws:policy/AmazonRoute53FullAccess",
     "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess",
+    # Required for Terraform state locking (DynamoDB lock table)
+    "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess",
+    # Required for Nimbus operational tasks (verifying ESO secrets, rotation checks)
+    "arn:aws:iam::aws:policy/SecretsManagerReadWrite",
   ])
 
   role       = aws_iam_role.jenkins_role.name

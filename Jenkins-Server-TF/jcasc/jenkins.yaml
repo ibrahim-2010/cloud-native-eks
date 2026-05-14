@@ -133,3 +133,145 @@ jobs:
           }
         }
       }
+
+  # ── Nimbus service pipelines (all share one Jenkinsfile, default SERVICE_NAME differs) ──
+
+  - script: >
+      pipelineJob('nimbus-auth-service') {
+        description('auth-service — SonarQube + Trivy + ECR + Helm values update')
+        parameters {
+          choiceParam('SERVICE_NAME',
+            ['auth-service', 'catalog-service', 'cart-service', 'order-service', 'notification-service'],
+            'NimbusRetail service to build and deploy')
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/ibrahim-2010/cloud-native-eks.git')
+                  credentials('github-creds')
+                }
+                branches('*/main')
+              }
+            }
+            scriptPath('Jenkins-Pipeline-Code/Jenkinsfile-Nimbus')
+          }
+        }
+      }
+
+  - script: >
+      pipelineJob('nimbus-catalog-service') {
+        description('catalog-service — SonarQube + Trivy + ECR + Helm values update')
+        parameters {
+          choiceParam('SERVICE_NAME',
+            ['catalog-service', 'auth-service', 'cart-service', 'order-service', 'notification-service'],
+            'NimbusRetail service to build and deploy')
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/ibrahim-2010/cloud-native-eks.git')
+                  credentials('github-creds')
+                }
+                branches('*/main')
+              }
+            }
+            scriptPath('Jenkins-Pipeline-Code/Jenkinsfile-Nimbus')
+          }
+        }
+      }
+
+  - script: >
+      pipelineJob('nimbus-cart-service') {
+        description('cart-service — SonarQube + Trivy + ECR + Helm values update')
+        parameters {
+          choiceParam('SERVICE_NAME',
+            ['cart-service', 'auth-service', 'catalog-service', 'order-service', 'notification-service'],
+            'NimbusRetail service to build and deploy')
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/ibrahim-2010/cloud-native-eks.git')
+                  credentials('github-creds')
+                }
+                branches('*/main')
+              }
+            }
+            scriptPath('Jenkins-Pipeline-Code/Jenkinsfile-Nimbus')
+          }
+        }
+      }
+
+  - script: >
+      pipelineJob('nimbus-order-service') {
+        description('order-service — SonarQube + Trivy + ECR + Helm values update')
+        parameters {
+          choiceParam('SERVICE_NAME',
+            ['order-service', 'auth-service', 'catalog-service', 'cart-service', 'notification-service'],
+            'NimbusRetail service to build and deploy')
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/ibrahim-2010/cloud-native-eks.git')
+                  credentials('github-creds')
+                }
+                branches('*/main')
+              }
+            }
+            scriptPath('Jenkins-Pipeline-Code/Jenkinsfile-Nimbus')
+          }
+        }
+      }
+
+  - script: >
+      pipelineJob('nimbus-notification-service') {
+        description('notification-service — SonarQube + Trivy + ECR + Helm values update')
+        parameters {
+          choiceParam('SERVICE_NAME',
+            ['notification-service', 'auth-service', 'catalog-service', 'cart-service', 'order-service'],
+            'NimbusRetail service to build and deploy')
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/ibrahim-2010/cloud-native-eks.git')
+                  credentials('github-creds')
+                }
+                branches('*/main')
+              }
+            }
+            scriptPath('Jenkins-Pipeline-Code/Jenkinsfile-Nimbus')
+          }
+        }
+      }
+
+  # ── Infrastructure pipeline — deploys EKS cluster + full platform ──
+  - script: >
+      pipelineJob('nimbus-infrastructure') {
+        description('Deploy EKS cluster + RDS + Redis + Kafka + ESO + Kyverno + observability + ArgoCD')
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/ibrahim-2010/cloud-native-eks.git')
+                  credentials('github-creds')
+                }
+                branches('*/main')
+              }
+            }
+            scriptPath('Jenkins-Pipeline-Code/Jenkinsfile-Infrastructure')
+          }
+        }
+      }

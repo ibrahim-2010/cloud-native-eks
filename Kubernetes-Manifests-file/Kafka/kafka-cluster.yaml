@@ -1,0 +1,58 @@
+# Strimzi KRaft-mode Kafka cluster for Nimbus Retail
+# Deployed by ArgoCD after the Strimzi operator is installed by Terraform.
+# KRaft mode: no ZooKeeper, combined controller+broker nodes.
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: nimbus-kafka
+spec:
+  replicas: 3
+  roles:
+    - controller
+    - broker
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 20Gi
+        deleteClaim: false
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 250m
+    limits:
+      memory: 1Gi
+      cpu: 500m
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: nimbus-kafka
+  namespace: kafka
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: 3.7.0
+    metadataVersion: 3.7-IV4
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      auto.create.topics.enable: "true"
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      min.insync.replicas: 2
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}

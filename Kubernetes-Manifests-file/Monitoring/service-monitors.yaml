@@ -1,0 +1,99 @@
+# ServiceMonitors for NimbusRetail services
+# Tells Prometheus to scrape /metrics from each service in the nimbus namespace.
+# Requires: service port named "http" (set in helm/nimbus-service/templates/service.yaml)
+# Label "release: monitoring" matches the Prometheus serviceMonitorSelector.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nimbus-auth-service
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - nimbus
+  selector:
+    matchLabels:
+      app: auth-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nimbus-catalog-service
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - nimbus
+  selector:
+    matchLabels:
+      app: catalog-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nimbus-cart-service
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - nimbus
+  selector:
+    matchLabels:
+      app: cart-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nimbus-order-service
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - nimbus
+  selector:
+    matchLabels:
+      app: order-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nimbus-notification-service
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - nimbus
+  selector:
+    matchLabels:
+      app: notification-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

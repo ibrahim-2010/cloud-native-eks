@@ -1,0 +1,37 @@
+serviceName: order-service
+
+image:
+  repository: 022374769206.dkr.ecr.us-east-1.amazonaws.com/nimbus/order-service
+  tag: "latest"
+
+service:
+  port: 3004
+  targetPort: 3004
+
+# DATABASE_URL and JWT_SECRET come from nimbus-secrets.
+envFromSecrets:
+  - nimbus-secrets
+
+env:
+  - name: PORT
+    value: "3004"
+  - name: SERVICE_NAME
+    value: "order-service"
+  - name: KAFKA_BROKERS
+    value: "nimbus-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  - name: CART_SERVICE_URL
+    value: "http://cart-service:3003"
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "300m"
+
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70

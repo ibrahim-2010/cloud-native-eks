@@ -1,17 +1,25 @@
 #!/bin/bash
 set -euo pipefail
 # =============================================================================
-#  Cloud-Native EKS — Bootstrap Script
-#  Creates ALL prerequisite AWS resources before any Terraform runs.
-#  Run this ONCE on a fresh AWS account.
+#  NimbusRetail — Bootstrap Script
 #
-#  Creates: S3 bucket, DynamoDB table, ECR repos, EC2 key pair
+#  Creates ALL prerequisite AWS resources before any Terraform runs.
+#  Run this ONCE on a fresh AWS account. Fully idempotent — safe to re-run.
+#
+#  Creates:
+#    1. S3 bucket (versioned + encrypted + public-access-blocked) — Terraform state
+#    2. DynamoDB table — Terraform state locking
+#    3. ECR repos (frontend, backend) — three-tier legacy; Nimbus repos via Terraform
+#    4. EC2 key pair — Jenkins SSH access
+#    5. AWS identity verification
+#    6. Orphan Jenkins IAM/SG cleanup (from previous deployments)
 #
 #  Usage: bash bootstrap.sh
 # =============================================================================
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m'
 
 REGION="us-east-1"
@@ -21,24 +29,47 @@ KEY_NAME="test"
 
 echo -e "${GREEN}"
 echo "╔══════════════════════════════════════════════════╗"
-echo "║     Cloud-Native EKS — Bootstrap                 ║"
+echo "║     NimbusRetail — Bootstrap                     ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# ─── S3 Bucket for Terraform State ───────────────────────────────────────────
-echo -e "${YELLOW}[1/5] Creating S3 bucket for Terraform state...${NC}"
+# ─── [1/6] S3 Bucket for Terraform State ─────────────────────────────────────
+echo -e "${YELLOW}[1/6] Creating S3 bucket for Terraform state...${NC}"
 if aws s3api head-bucket --bucket "$S3_BUCKET" --region "$REGION" 2>/dev/null; then
-  echo "  Bucket $S3_BUCKET already exists — skipping"
+  echo "  Bucket $S3_BUCKET already exists — skipping creation"
 else
   aws s3api create-bucket --bucket "$S3_BUCKET" --region "$REGION"
-  aws s3api put-bucket-versioning \
-    --bucket "$S3_BUCKET" \
-    --versioning-configuration Status=Enabled
-  echo "  Created and versioning enabled: $S3_BUCKET"
+  echo "  Created: $S3_BUCKET"
 fi
 
-# ─── DynamoDB Table for State Locking ────────────────────────────────────────
-echo -e "${YELLOW}[2/5] Creating DynamoDB table for state locking...${NC}"
+# Versioning (idempotent — safe to re-apply)
+aws s3api put-bucket-versioning \
+  --bucket "$S3_BUCKET" \
+  --versioning-configuration Status=Enabled
+echo "  Versioning: enabled"
+
+# Server-side encryption — required for production state buckets
+aws s3api put-bucket-encryption \
+  --bucket "$S3_BUCKET" \
+  --server-side-encryption-configuration '{
+    "Rules": [{
+      "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+      },
+      "BucketKeyEnabled": true
+    }]
+  }'
+echo "  Encryption: AES256 enabled"
+
+# Block all public access — state must never be public
+aws s3api put-public-access-block \
+  --bucket "$S3_BUCKET" \
+  --public-access-block-configuration \
+    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+echo "  Public access: fully blocked"
+
+# ─── [2/6] DynamoDB Table for State Locking ──────────────────────────────────
+echo -e "${YELLOW}[2/6] Creating DynamoDB table for state locking...${NC}"
 if aws dynamodb describe-table --table-name "$DYNAMO_TABLE" --region "$REGION" 2>/dev/null | grep -q "ACTIVE"; then
   echo "  Table $DYNAMO_TABLE already exists — skipping"
 else
@@ -48,26 +79,29 @@ else
     --key-schema AttributeName=LockID,KeyType=HASH \
     --billing-mode PAY_PER_REQUEST \
     --region "$REGION"
-  echo "  Created: $DYNAMO_TABLE"
-  echo "  Waiting for table to become active..."
+  echo "  Created: $DYNAMO_TABLE (waiting for ACTIVE...)"
   aws dynamodb wait table-exists --table-name "$DYNAMO_TABLE" --region "$REGION"
+  echo "  Status: ACTIVE"
 fi
 
-# ─── ECR Repositories ───────────────────────────────────────────────────────
-echo -e "${YELLOW}[3/5] Creating ECR repositories...${NC}"
+# ─── [3/6] ECR Repositories ──────────────────────────────────────────────────
+echo -e "${YELLOW}[3/6] Creating ECR repositories (legacy three-tier)...${NC}"
+echo "  NOTE: Nimbus ECR repos (nimbus/*) are created by EKS-Terraform/ecr.tf"
 for REPO in frontend backend; do
   if aws ecr describe-repositories --repository-names "$REPO" --region "$REGION" 2>/dev/null | grep -q "$REPO"; then
-    echo "  ECR repo $REPO already exists — skipping"
+    echo "  ECR repo '$REPO' already exists — skipping"
   else
-    aws ecr create-repository --repository-name "$REPO" --region "$REGION" > /dev/null
-    echo "  Created: $REPO"
+    aws ecr create-repository --repository-name "$REPO" \
+      --image-scanning-configuration scanOnPush=true \
+      --region "$REGION" > /dev/null
+    echo "  Created: $REPO (image scanning enabled)"
   fi
 done
 
-# ─── EC2 Key Pair ────────────────────────────────────────────────────────────
-echo -e "${YELLOW}[4/5] Creating EC2 key pair...${NC}"
+# ─── [4/6] EC2 Key Pair ──────────────────────────────────────────────────────
+echo -e "${YELLOW}[4/6] Creating EC2 key pair...${NC}"
 if aws ec2 describe-key-pairs --key-names "$KEY_NAME" --region "$REGION" 2>/dev/null | grep -q "$KEY_NAME"; then
-  echo "  Key pair $KEY_NAME already exists — skipping"
+  echo "  Key pair '$KEY_NAME' already exists — skipping"
 else
   aws ec2 create-key-pair \
     --key-name "$KEY_NAME" \
@@ -75,43 +109,90 @@ else
     --output text \
     --region "$REGION" > "${KEY_NAME}.pem"
   chmod 400 "${KEY_NAME}.pem"
-  echo "  Created: ${KEY_NAME}.pem (save this file securely)"
+  echo "  Created: ${KEY_NAME}.pem — save this file securely, it cannot be re-downloaded"
 fi
 
-# ─── Verify AWS Identity ────────────────────────────────────────────────────
-echo -e "${YELLOW}[5/5] Verifying AWS identity...${NC}"
+# ─── [5/6] Verify AWS Identity ───────────────────────────────────────────────
+echo -e "${YELLOW}[5/6] Verifying AWS identity...${NC}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "  Account: $ACCOUNT_ID"
-echo "  Region: $REGION"
+echo "  Region:  $REGION"
 
-# ─── Clean orphan Jenkins resources from previous deployments ────────────────
-echo -e "${YELLOW}[6/6] Cleaning orphan Jenkins resources...${NC}"
-aws iam remove-role-from-instance-profile --instance-profile-name jenkins-cloud-native-profile --role-name jenkins-cloud-native-role 2>/dev/null
-aws iam delete-instance-profile --instance-profile-name jenkins-cloud-native-profile 2>/dev/null
-for ARN in $(aws iam list-attached-role-policies --role-name jenkins-cloud-native-role --query "AttachedPolicies[].PolicyArn" --output text 2>/dev/null); do
-  aws iam detach-role-policy --role-name jenkins-cloud-native-role --policy-arn "$ARN" 2>/dev/null
+# ─── [6/6] Clean Orphan Jenkins Resources ────────────────────────────────────
+echo -e "${YELLOW}[6/6] Cleaning orphan Jenkins resources from previous deployments...${NC}"
+aws iam remove-role-from-instance-profile \
+  --instance-profile-name jenkins-cloud-native-profile \
+  --role-name jenkins-cloud-native-role 2>/dev/null && echo "  Removed role from profile" || true
+aws iam delete-instance-profile \
+  --instance-profile-name jenkins-cloud-native-profile 2>/dev/null && echo "  Deleted instance profile" || true
+for ARN in $(aws iam list-attached-role-policies \
+    --role-name jenkins-cloud-native-role \
+    --query "AttachedPolicies[].PolicyArn" \
+    --output text 2>/dev/null); do
+  aws iam detach-role-policy --role-name jenkins-cloud-native-role --policy-arn "$ARN" 2>/dev/null || true
 done
-for NAME in $(aws iam list-role-policies --role-name jenkins-cloud-native-role --query "PolicyNames[]" --output text 2>/dev/null); do
-  aws iam delete-role-policy --role-name jenkins-cloud-native-role --policy-name "$NAME" 2>/dev/null
+for NAME in $(aws iam list-role-policies \
+    --role-name jenkins-cloud-native-role \
+    --query "PolicyNames[]" \
+    --output text 2>/dev/null); do
+  aws iam delete-role-policy --role-name jenkins-cloud-native-role --policy-name "$NAME" 2>/dev/null || true
 done
-aws iam delete-role --role-name jenkins-cloud-native-role 2>/dev/null
-SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=jenkins-cloud-native-sg" --query "SecurityGroups[0].GroupId" --output text --region us-east-1 2>/dev/null)
-[ -n "$SG_ID" ] && [ "$SG_ID" != "None" ] && aws ec2 delete-security-group --group-id "$SG_ID" --region us-east-1 2>/dev/null
-echo "  Orphan cleanup complete"
+aws iam delete-role --role-name jenkins-cloud-native-role 2>/dev/null && echo "  Deleted IAM role" || true
+SG_ID=$(aws ec2 describe-security-groups \
+  --filters "Name=group-name,Values=jenkins-cloud-native-sg" \
+  --query "SecurityGroups[0].GroupId" \
+  --output text --region "$REGION" 2>/dev/null || echo "")
+if [ -n "$SG_ID" ] && [ "$SG_ID" != "None" ]; then
+  aws ec2 delete-security-group --group-id "$SG_ID" --region "$REGION" 2>/dev/null \
+    && echo "  Deleted security group: $SG_ID" || true
+else
+  echo "  No orphan Jenkins resources found"
+fi
 
-# ─── Summary ────────────────────────────────────────────────────────────────
+# ─── Summary ──────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════╗"
 echo "║         BOOTSTRAP COMPLETE                        ║"
 echo "╚══════════════════════════════════════════════════╝${NC}"
 echo ""
-echo "Resources created:"
-echo "  S3 Bucket:      $S3_BUCKET"
+echo "Resources ready:"
+echo "  S3 Bucket:       $S3_BUCKET  (versioned, encrypted, public-access-blocked)"
 echo "  DynamoDB Table:  $DYNAMO_TABLE"
-echo "  ECR Repos:       frontend, backend"
-echo "  Key Pair:        $KEY_NAME"
+echo "  ECR Repos:       frontend, backend  (three-tier legacy)"
+echo "  Key Pair:        $KEY_NAME  → ${KEY_NAME}.pem"
 echo "  Account ID:      $ACCOUNT_ID"
 echo ""
-echo "Next steps:"
-echo "  1. cd Jenkins-Server-TF && terraform init && terraform apply -auto-approve"
-echo "  2. cd EKS-Terraform && terraform init && terraform apply -auto-approve"
+echo "  Nimbus ECR repos (nimbus/auth-service etc.) are created by Terraform."
+echo ""
+echo -e "${YELLOW}Next steps:${NC}"
+echo ""
+echo "  1. Deploy Jenkins server:"
+echo "     cd Jenkins-Server-TF"
+echo "     terraform init"
+echo "     terraform plan"
+echo "     terraform apply"
+echo ""
+echo "  2. Configure Jenkins (run on the Jenkins EC2 after boot):"
+echo "     sudo bash /opt/setup-jcasc.sh"
+echo ""
+echo "  3. Deploy EKS + Nimbus infrastructure:"
+echo "     cd ../EKS-Terraform"
+echo "     terraform init"
+echo "     terraform plan  -var-file=\"nimbus.tfvars\""
+echo "     terraform apply -var-file=\"nimbus.tfvars\""
+echo ""
+echo "  4. Populate AWS Secrets Manager (required before Nimbus services start):"
+echo "     aws secretsmanager create-secret \\"
+echo "       --name nimbus-cluster/nimbus-secrets --region $REGION \\"
+echo "       --secret-string '{\"JWT_SECRET\":\"<val>\",\"DATABASE_URL\":\"postgres://...\",\"REDIS_URL\":\"redis://...\"}'"
+echo "     aws secretsmanager create-secret \\"
+echo "       --name nimbus-cluster/nimbus-catalog-secrets --region $REGION \\"
+echo "       --secret-string '{\"DATABASE_URL\":\"postgresql://...\",\"REDIS_URL\":\"redis://...\"}'"
+echo ""
+echo "  5. Install ArgoCD and deploy app-of-apps:"
+echo "     kubectl apply -n argocd \\"
+echo "       -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml \\"
+echo "       --server-side --force-conflicts"
+echo "     kubectl apply -f argocd/app-of-apps.yaml"
+echo ""
+echo "  See docs/RUNBOOK.md for the full deployment sequence."

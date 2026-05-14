@@ -1,0 +1,33 @@
+serviceName: notification-service
+
+image:
+  repository: 022374769206.dkr.ecr.us-east-1.amazonaws.com/nimbus/notification-service
+  tag: "latest"
+
+service:
+  port: 3005
+  targetPort: 3005
+
+# notification-service has no DB or JWT dependency — no secret needed.
+envFromSecrets: []
+
+env:
+  - name: PORT
+    value: "3005"
+  - name: SERVICE_NAME
+    value: "notification-service"
+  - name: KAFKA_BROKERS
+    value: "nimbus-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "50m"
+  limits:
+    memory: "128Mi"
+    cpu: "200m"
+
+# notification-service is a Kafka consumer — it doesn't handle HTTP traffic
+# and doesn't need to scale based on CPU. HPA left off.
+hpa:
+  enabled: false

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nimbus-service.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nimbus-service.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "nimbus-service.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP

@@ -1,0 +1,39 @@
+serviceName: auth-service
+
+image:
+  repository: 022374769206.dkr.ecr.us-east-1.amazonaws.com/nimbus/auth-service
+  tag: "latest"
+
+service:
+  port: 3001
+  targetPort: 3001
+
+# Sensitive values (DATABASE_URL, JWT_SECRET) come from the nimbus-secrets Secret.
+# Create the secret before deploying:
+#   kubectl create secret generic nimbus-secrets -n nimbus \
+#     --from-literal=JWT_SECRET=<your-secret> \
+#     --from-literal=DATABASE_URL=postgres://postgres:<pass>@<rds-endpoint>:5432/nimbus
+envFromSecrets:
+  - nimbus-secrets
+
+env:
+  - name: PORT
+    value: "3001"
+  - name: SERVICE_NAME
+    value: "auth-service"
+  - name: KAFKA_BROKERS
+    value: "nimbus-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "300m"
+
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70

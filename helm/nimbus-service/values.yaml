@@ -1,0 +1,48 @@
+# Default values — overridden by each per-service values-<name>.yaml file.
+
+serviceName: ""      # required — set in each values file
+
+replicaCount: 1
+
+image:
+  repository: ""     # required — set in each values file
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  port: 3000         # overridden per service
+  targetPort: 3000
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "300m"
+
+# Plain environment variables (non-sensitive)
+env: []
+# - name: SERVICE_NAME
+#   value: my-service
+
+# Names of existing Kubernetes Secrets to load as env vars (envFrom)
+envFromSecrets: []
+# - nimbus-secrets
+
+probes:
+  enabled: true
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 10
+    periodSeconds: 5
+
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70

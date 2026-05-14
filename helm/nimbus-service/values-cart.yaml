@@ -1,0 +1,37 @@
+serviceName: cart-service
+
+image:
+  repository: 022374769206.dkr.ecr.us-east-1.amazonaws.com/nimbus/cart-service
+  tag: "latest"
+
+service:
+  port: 3003
+  targetPort: 3003
+
+# DATABASE_URL, REDIS_URL, JWT_SECRET come from nimbus-secrets.
+# kubectl create secret generic nimbus-secrets -n nimbus \
+#   --from-literal=JWT_SECRET=<your-secret> \
+#   --from-literal=DATABASE_URL=postgres://postgres:<pass>@<rds-endpoint>:5432/nimbus \
+#   --from-literal=REDIS_URL=redis://<elasticache-endpoint>:6379
+envFromSecrets:
+  - nimbus-secrets
+
+env:
+  - name: PORT
+    value: "3003"
+  - name: SERVICE_NAME
+    value: "cart-service"
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "300m"
+
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70

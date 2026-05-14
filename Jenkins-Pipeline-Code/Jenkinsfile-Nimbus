@@ -1,0 +1,173 @@
+// ══════════════════════════════════════════════════════════════
+//  NimbusRetail — Service CI/CD Pipeline
+//
+//  Stages:
+//    1. Checkout app repo (nimbus-retail-starter)
+//    2. SonarQube static analysis
+//    3. Quality Gate
+//    4. Trivy filesystem scan
+//    5. Docker build + tag
+//    6. Trivy image scan
+//    7. Push to ECR
+//    8. Update Helm values in platform repo → ArgoCD deploys
+//
+//  Required Jenkins credentials:
+//    ACCOUNT_ID    — AWS account ID (string secret)
+//    github-creds  — GitHub username/password for checkout
+//    github-token  — GitHub PAT for git push to platform repo
+//    sonar         — SonarQube token (configured via JCasC)
+// ══════════════════════════════════════════════════════════════
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'SERVICE_NAME',
+            choices: ['auth-service', 'catalog-service', 'cart-service', 'order-service', 'notification-service'],
+            description: 'NimbusRetail service to build and deploy'
+        )
+    }
+
+    environment {
+        AWS_ACCOUNT_ID     = credentials('ACCOUNT_ID')
+        AWS_DEFAULT_REGION = 'us-east-1'
+        APP_REPO           = 'https://github.com/ibrahim-2010/nimbus-retail-starter.git'
+        PLATFORM_REPO      = 'https://github.com/ibrahim-2010/cloud-native-eks.git'
+    }
+
+    stages {
+
+        // ── Derive runtime variables from SERVICE_NAME ──────────────────────
+        stage('Init') {
+            steps {
+                script {
+                    env.ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+                    env.REPO_URI     = "${env.ECR_REGISTRY}/nimbus/${params.SERVICE_NAME}"
+                    // values-auth.yaml, values-catalog.yaml, etc.
+                    env.VALUES_KEY   = params.SERVICE_NAME.replace('-service', '')
+                    // catalog-service uses Python; all others are Node.js
+                    env.SONAR_EXCLUSIONS = (params.SERVICE_NAME == 'catalog-service')
+                        ? '__pycache__/**,*.pyc,venv/**,requirements.txt'
+                        : 'node_modules/**,coverage/**'
+                    echo "Building: ${params.SERVICE_NAME}"
+                    echo "ECR:      ${env.REPO_URI}:${BUILD_NUMBER}"
+                    echo "Values:   helm/nimbus-service/values-${env.VALUES_KEY}.yaml"
+                }
+            }
+        }
+
+        stage('Cleanup Workspace') {
+            steps { cleanWs() }
+        }
+
+        // ── Pull service source code from the app repository ─────────────────
+        stage('Checkout App Code') {
+            steps {
+                git branch: 'main',
+                    url: env.APP_REPO,
+                    credentialsId: 'github-creds'
+            }
+        }
+
+        // ── Static analysis ──────────────────────────────────────────────────
+        stage('SonarQube Analysis') {
+            steps {
+                dir("services/${params.SERVICE_NAME}") {
+                    withSonarQubeEnv('sonar') {
+                        sh """
+                            sonar-scanner \
+                              -Dsonar.projectKey=nimbus-${params.SERVICE_NAME} \
+                              -Dsonar.projectName="NimbusRetail ${params.SERVICE_NAME}" \
+                              -Dsonar.sources=. \
+                              -Dsonar.exclusions=${env.SONAR_EXCLUSIONS}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 2, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        // ── Security scanning ────────────────────────────────────────────────
+        stage('Trivy Filesystem Scan') {
+            steps {
+                dir("services/${params.SERVICE_NAME}") {
+                    sh 'trivy fs --exit-code 0 --severity HIGH,CRITICAL --format table .'
+                }
+            }
+        }
+
+        // ── Build ────────────────────────────────────────────────────────────
+        stage('Docker Build & Tag') {
+            steps {
+                dir("services/${params.SERVICE_NAME}") {
+                    sh "docker build -t ${env.REPO_URI}:${BUILD_NUMBER} ."
+                    sh "docker tag ${env.REPO_URI}:${BUILD_NUMBER} ${env.REPO_URI}:latest"
+                }
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            steps {
+                sh "trivy image --exit-code 0 --severity HIGH,CRITICAL --format table ${env.REPO_URI}:${BUILD_NUMBER}"
+            }
+        }
+
+        // ── Publish ──────────────────────────────────────────────────────────
+        stage('Push to ECR') {
+            steps {
+                sh """
+                    aws ecr get-login-password --region ${AWS_DEFAULT_REGION} \
+                      | docker login --username AWS --password-stdin ${env.ECR_REGISTRY}
+                    docker push ${env.REPO_URI}:${BUILD_NUMBER}
+                    docker push ${env.REPO_URI}:latest
+                """
+            }
+        }
+
+        // ── GitOps: update Helm values → ArgoCD detects and deploys ─────────
+        stage('Update Helm Values') {
+            environment {
+                GITHUB_TOKEN = credentials('github-token')
+            }
+            steps {
+                sh """
+                    rm -rf platform-repo
+                    git clone https://${GITHUB_TOKEN}@github.com/ibrahim-2010/cloud-native-eks.git platform-repo
+                    cd platform-repo
+
+                    sed -i 's|  tag: ".*"|  tag: "${BUILD_NUMBER}"|' \
+                        helm/nimbus-service/values-${env.VALUES_KEY}.yaml
+
+                    git config user.email "jenkins@nimbus.local"
+                    git config user.name "Jenkins Pipeline"
+                    git add helm/nimbus-service/values-${env.VALUES_KEY}.yaml
+                    git commit -m "chore(${params.SERVICE_NAME}): deploy build ${BUILD_NUMBER}" || true
+                    git push origin main
+                """
+            }
+        }
+    }
+
+    post {
+        always {
+            sh "docker rmi ${env.REPO_URI}:${BUILD_NUMBER} || true"
+            sh "docker rmi ${env.REPO_URI}:latest || true"
+            sh "rm -rf platform-repo"
+            cleanWs()
+        }
+        success {
+            echo "✅ ${params.SERVICE_NAME} build ${BUILD_NUMBER} deployed — ArgoCD will sync shortly"
+        }
+        failure {
+            echo "❌ Pipeline failed for ${params.SERVICE_NAME} build ${BUILD_NUMBER}"
+        }
+    }
+}

@@ -51,3 +51,28 @@ output "configure_kubectl" {
   description = "Command to configure kubectl"
   value       = "aws eks update-kubeconfig --name ${var.cluster_name} --region ${var.aws_region}"
 }
+
+output "rds_endpoint" {
+  description = "RDS PostgreSQL endpoint (host:port)"
+  value       = aws_db_instance.main.endpoint
+}
+
+output "db_secret_arn" {
+  description = "Secrets Manager ARN holding the RDS master password"
+  value       = aws_secretsmanager_secret.db_password.arn
+}
+
+output "redis_endpoint" {
+  description = "ElastiCache Redis endpoint"
+  value       = aws_elasticache_cluster.main.cache_nodes[0].address
+}
+
+output "ecr_repository_urls" {
+  description = "ECR repository URLs keyed by service name"
+  value       = { for k, v in aws_ecr_repository.services : k => v.repository_url }
+}
+
+output "eso_role_arn" {
+  description = "IAM role ARN for External Secrets Operator (annotate ESO service account)"
+  value       = aws_iam_role.eso.arn
+}

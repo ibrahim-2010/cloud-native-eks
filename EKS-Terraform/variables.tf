@@ -69,3 +69,31 @@ variable "node_disk_size" {
   type        = number
   default     = 20
 }
+
+# ── RDS ──────────────────────────────────────
+
+variable "db_engine_version" {
+  description = "PostgreSQL engine version"
+  type        = string
+  default     = "16.3"
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class"
+  type        = string
+  default     = "db.t3.micro"
+}
+
+# ── ElastiCache ───────────────────────────────
+
+variable "redis_engine_version" {
+  description = "Redis engine version"
+  type        = string
+  default     = "7.1"
+}
+
+variable "redis_node_type" {
+  description = "ElastiCache node type"
+  type        = string
+  default     = "cache.t3.micro"
+}
