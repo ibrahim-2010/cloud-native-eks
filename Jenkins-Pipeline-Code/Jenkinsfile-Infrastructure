@@ -37,7 +37,6 @@ pipeline {
             }
         }
 
-        // ── EKS + RDS + Redis + Kafka operator + ESO + Kyverno + observability ──
         stage('Terraform Init') {
             steps {
                 dir('EKS-Terraform') {
@@ -46,18 +45,30 @@ pipeline {
             }
         }
 
-        stage('Terraform Plan') {
+        // ── Stage 1: EKS cluster + node group only ───────────────────────────
+        // Kubernetes/Helm provider uses aws_eks_cluster.main.endpoint which is
+        // empty until the cluster exists. Targeting the cluster first ensures
+        // the endpoint is resolvable before any kubernetes_* or helm_release
+        // resources run in Stage 2.
+        stage('Terraform Apply — EKS Cluster') {
             steps {
                 dir('EKS-Terraform') {
-                    sh 'terraform plan -var-file="nimbus.tfvars" -out=tfplan'
+                    sh '''
+                        terraform apply \
+                          -target=aws_eks_cluster.main \
+                          -target=aws_eks_node_group.main \
+                          -var-file="nimbus.tfvars" \
+                          -auto-approve
+                    '''
                 }
             }
         }
 
-        stage('Terraform Apply') {
+        // ── Stage 2: Everything else (Kubernetes resources + Helm + RDS + Redis) ─
+        stage('Terraform Apply — Full Stack') {
             steps {
                 dir('EKS-Terraform') {
-                    sh 'terraform apply tfplan'
+                    sh 'terraform apply -var-file="nimbus.tfvars" -auto-approve'
                 }
             }
         }
