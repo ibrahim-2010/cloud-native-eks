@@ -27,6 +27,8 @@ The entire platform — from VPC to running pods — is deployed through a singl
 
 ## Architecture
 
+> Full interactive diagram: [docs/architecture.md](docs/architecture.md) — renders on GitHub, export PNG/SVG at [mermaid.live](https://mermaid.live)
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  Internet                                                               │
